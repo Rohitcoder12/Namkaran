@@ -1,4 +1,4 @@
-# main.py (Final version with robust channel checking)
+# main.py (Final version with allow_reentry=True)
 import logging
 import os
 import re
@@ -77,13 +77,10 @@ async def edit_or_send_message(ctx, text, reply_markup):
     if isinstance(ctx, Update):
         message_obj = ctx.callback_query.message if ctx.callback_query else ctx.message
     else: message_obj = ctx
-    try:
-        await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+    try: await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
     except BadRequest:
-        try:
-            await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-        except BadRequest:
-            await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+        try: await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        except BadRequest: await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -111,46 +108,31 @@ async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
-    
     user_id = update.effective_user.id
     user_channels_ids = get_user_channels(user_id)
-    
     keyboard = []
-    # THE FIX: Loop through channels and check if the bot can access them.
     for channel_id in user_channels_ids:
         try:
-            # This is the line that was causing the error
             chat = await context.bot.get_chat(channel_id)
             keyboard.append([InlineKeyboardButton(f"{chat.title}", callback_data=f"channel_{channel_id}")])
         except Forbidden:
-            # If bot is not in the channel, log it and remove from DB
             logger.warning(f"Bot is not in channel {channel_id} anymore. Removing from DB.")
             channels_collection.delete_one({"_id": channel_id, "admin_user_id": user_id})
-        except Exception as e:
-            logger.error(f"Could not get chat info for {channel_id}: {e}")
-
-    if not keyboard: # If after checking, there are no valid channels left
+        except Exception as e: logger.error(f"Could not get chat info for {channel_id}: {e}")
+    if not keyboard:
         text = "I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again."
         if query: await query.edit_message_text(text)
         else: await update.message.reply_text(text)
         return ConversationHandler.END
-
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     await edit_or_send_message(update, "Choose a channel to manage its settings:", InlineKeyboardMarkup(keyboard))
     return SELECTING_CHANNEL
 
-# ... (The rest of the code is unchanged) ...
 async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
     channel_id = int(query.data.split('_')[1]); context.user_data['current_channel_id'] = channel_id
     settings = get_channel_settings(channel_id) or {}; link_remover_status = "ON ✔️" if settings.get('link_remover_on') else "OFF ❌"
-    keyboard = [
-        [InlineKeyboardButton("📝 Set Caption 📝", callback_data="manage_caption")],
-        [InlineKeyboardButton("🚫 Set Words Remover 🚫", callback_data="placeholder")],
-        [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
-        [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]
-    ]
+    keyboard = [[InlineKeyboardButton("📝 Set Caption 📝", callback_data="manage_caption")], [InlineKeyboardButton("🚫 Set Words Remover 🚫", callback_data="placeholder")], [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")], [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")], [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await edit_or_send_message(query.message, f"Managing settings for: <b>{(await context.bot.get_chat(channel_id)).title}</b>", reply_markup)
     return MANAGE_CHANNEL
@@ -191,7 +173,7 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer("Caption deleted!")
     channels_collection.update_one({"_id": context.user_data['current_channel_id']}, {"$unset": {"caption_text": ""}})
-    await manage_caption_menu(update, context)
+    await manage_caption_menu(update, context) # Refresh menu
     return MANAGE_CAPTION
 
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -215,8 +197,9 @@ async def perform_remove_channel(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query; await query.answer()
-    await edit_or_send_message(query.message, "Operation canceled.", None)
+    if update.callback_query:
+        await update.callback_query.answer()
+        await edit_or_send_message(update.callback_query.message, "Operation canceled.", None)
     return ConversationHandler.END
 
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,7 +218,7 @@ async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     file_name = getattr(file_obj, 'file_name', 'Photo'); file_size_mb = f"{file_obj.file_size / (1024*1024):.2f} MB" if file_obj.file_size else "N/A"
     new_caption = settings.get("caption_text") or file_caption
     if new_caption:
-        new_caption = new_caption.replace("{file_name}", str(file_name)).replace("{file_size}", file_size_mb).replace("{file_caption}", file_caption)
+        new_caption = new_caption.replace("{file_name}", html.escape(str(file_name))).replace("{file_size}", file_size_mb).replace("{file_caption}", html.escape(file_caption))
     if settings.get("link_remover_on"): new_caption = re.sub(r'https?://\S+|@\w+', '', new_caption).strip()
     try:
         if new_caption != (message.caption or ""): await context.bot.edit_message_caption(chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML')
@@ -283,6 +266,8 @@ def main() -> None:
         },
         fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel, pattern='^cancel$')],
         per_message=False,
+        # THE FIX: This is the key to solving the unresponsive button issue.
+        allow_reentry=True
     )
 
     application.add_handler(CommandHandler("start", start))
