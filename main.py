@@ -1,4 +1,4 @@
-# main.py (Final version with corrected Caption Font help text)
+# main.py (Final Polished Version)
 import logging
 import os
 import re
@@ -148,17 +148,16 @@ async def manage_caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 # --- THE FIX IS HERE ---
 async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    # We escape the example tags to prevent Telegram from trying to render them.
     font_help_text = (
         "🔰 <b>About Caption Font</b> 🔰\n\n"
         "You can use HTML tags to format your caption text.\n\n"
-        "➤ <b>Bold Text</b>\n  <code><b>text</b></code>\n\n"
-        "➤ <i>Italic Text</i>\n  <code><i>text</i></code>\n\n"
-        "➤ <u>Underline Text</u>\n  <code><u>text</u></code>\n\n"
-        "➤ <s>Strike Text</s>\n  <code><s>text</s></code>\n\n"
-        "➤ Spoiler Text\n  <code><tg-spoiler>text</tg-spoiler></code>\n\n"
-        "➤ <code>Mono Text</code>\n  <code><code>text</code></code>\n\n"
-        "➤ Hyperlink Text\n  <code><a href=\"URL\">text</a></code>"
+        "➤ <b>Bold Text</b>\n  <code><b>{file_name}</b></code>\n\n"
+        "➤ <i>Italic Text</i>\n  <code><i>{file_name}</i></code>\n\n"
+        "➤ <u>Underline Text</u>\n  <code><u>{file_name}</u></code>\n\n"
+        "➤ <s>Strike Text</s>\n  <code><s>{file_name}</s></code>\n\n"
+        "➤ Spoiler Text\n  <code><tg-spoiler>{file_name}</tg-spoiler></code>\n\n"
+        "➤ <code>Mono Text</code>\n  <code><code>{file_name}</code></code>\n\n"
+        "➤ Hyperlink Text\n  <code><a href=\"https://t.me/RexonBlack\">{file_name}</a></code>"
     )
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, font_help_text, InlineKeyboardMarkup(keyboard))
