@@ -79,7 +79,7 @@ async def edit_or_send_message(ctx, text, reply_markup):
     else: message_obj = ctx
     try: await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
     except BadRequest:
-        try: await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        try: await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
         except BadRequest: await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
 # --- Command Handlers ---
@@ -104,7 +104,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer("This feature is under development.", show_alert=True)
 
-# --- Refactored Conversation Logic ---
+# --- Conversation Logic ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -148,16 +148,17 @@ async def manage_caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 # --- THE FIX IS HERE ---
 async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
+    # This string is now formatted correctly to display like the demo bot
     font_help_text = (
-        "🔰 <b>About Caption Font</b> 🔰\n\n"
-        "You can use HTML tags to format your caption text.\n\n"
-        "➤ <b>Bold Text</b>\n  <code><b>{file_name}</b></code>\n\n"
-        "➤ <i>Italic Text</i>\n  <code><i>{file_name}</i></code>\n\n"
-        "➤ <u>Underline Text</u>\n  <code><u>{file_name}</u></code>\n\n"
-        "➤ <s>Strike Text</s>\n  <code><s>{file_name}</s></code>\n\n"
-        "➤ Spoiler Text\n  <code><tg-spoiler>{file_name}</tg-spoiler></code>\n\n"
-        "➤ <code>Mono Text</code>\n  <code><code>{file_name}</code></code>\n\n"
-        "➤ Hyperlink Text\n  <code><a href=\"https://t.me/RexonBlack\">{file_name}</a></code>"
+        '🔰 <b>About Caption Font</b> 🔰\n\n'
+        'You can use HTML tags to format your caption text.\n\n'
+        '➤ <b>Bold Text</b>\n  <code><b>{file_name}</b></code>\n\n'
+        '➤ <i>Italic Text</i>\n  <code><i>{file_name}</i></code>\n\n'
+        '➤ <u>Underline Text</u>\n  <code><u>{file_name}</u></code>\n\n'
+        '➤ <s>Strike Text</s>\n  <code><s>{file_name}</s></code>\n\n'
+        '➤ Spoiler Text\n  <code><tg-spoiler>{file_name}</tg-spoiler></code>\n\n'
+        '➤ <code>Mono Text</code>\n  <code><code>{file_name}</code></code>\n\n'
+        '➤ Hyperlink Text\n  <code><a href="https://t.me/RexonBlack">{file_name}</a></code>'
     )
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, font_help_text, InlineKeyboardMarkup(keyboard))
