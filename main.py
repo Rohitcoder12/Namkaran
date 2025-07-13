@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version)
+# main.py (Final Polished Version)
 import logging
 import os
 import re
@@ -72,36 +72,22 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         try: await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send error log to developer: {e}")
 
-# --- THE PERMANENT FIX ---
+# --- Utility to handle message editing correctly ---
 async def edit_or_send_message(ctx, text, reply_markup):
-    """A robust helper to edit a message, correctly distinguishing between photo and text messages."""
     message_obj = None
     if isinstance(ctx, Update):
         message_obj = ctx.callback_query.message if ctx.callback_query else ctx.message
-    else:
-        message_obj = ctx
-    
+    else: message_obj = ctx
     try:
         if message_obj.photo:
-            # This is a photo message, so we must use edit_caption
-            await message_obj.edit_caption(
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
+            await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
         else:
-            # This is a text message, so we use edit_text
-            await message_obj.edit_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode='HTML',
-                disable_web_page_preview=True
-            )
+            await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
     except BadRequest as e:
-        if "message is not modified" in str(e).lower():
-            logger.warning("Message not modified, ignoring.")
-        else:
+        if "message is not modified" not in str(e).lower():
             logger.error(f"Error editing message: {e}")
+            # Failsafe if editing fails for another reason
+            await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -125,11 +111,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await edit_or_send_message(update.callback_query.message, help_text, reply_markup)
     else: await update.message.reply_text(text=help_text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
-# ... (The rest of the code is unchanged and correct) ...
-
 async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer("This feature is under development.", show_alert=True)
 
+# --- Conversation Logic ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -179,19 +164,39 @@ async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    text = "Send me the new caption text. Use the placeholders and HTML formatting as needed."
+    text = "Send me the new caption text. Use the placeholders and HTML formatting as needed.\n\nNew Placeholders:\n• <code>{file_title}</code> - Filename without extension."
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, text, InlineKeyboardMarkup(keyboard))
     return SETTING_CAPTION
 
+# --- THE FIX FOR THE BACK BUTTON ---
 async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     channel_id = context.user_data['current_channel_id']; new_caption_text = update.message.text
     channels_collection.update_one({"_id": channel_id}, {"$set": {"caption_text": new_caption_text}}, upsert=True)
     await update.message.reply_text("✅ Caption updated successfully!")
+    
+    # This automatically calls the menu function again, showing the updated caption
+    # We create a "dummy" callback_query object so the function receives what it expects
     class DummyQuery:
         def __init__(self, message): self.message = message
         async def answer(self): pass
-    await manage_caption_menu(Update(update.update_id, callback_query=DummyQuery(message=update.message)), context)
+    
+    # We need to delete the user's message and the bot's confirmation to keep the chat clean
+    await update.message.delete()
+    
+    # Find the last message the bot sent to build the menu from
+    # This is a bit complex but ensures we edit the correct menu message
+    last_bot_message_id = None
+    if context.user_data.get('last_menu_message_id'):
+        last_bot_message_id = context.user_data.get('last_menu_message_id')
+    
+    # If we have a message to edit, create the dummy query with it
+    if last_bot_message_id:
+        dummy_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="Updating menu...")
+        await dummy_message.delete()
+        dummy_message.message_id = last_bot_message_id
+        await manage_caption_menu(Update(update.update_id, callback_query=DummyQuery(message=dummy_message)), context)
+    
     return MANAGE_CAPTION
 
 async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -226,6 +231,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await edit_or_send_message(update.callback_query.message, "Operation canceled.", None)
     return ConversationHandler.END
 
+# --- Core Logic ---
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
     message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
@@ -237,24 +243,44 @@ async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         elif message.photo: await context.bot.send_photo(chat_id=LOG_CHANNEL_ID, photo=message.photo[-1].file_id, caption=message.caption)
         elif message.audio: await context.bot.send_audio(chat_id=LOG_CHANNEL_ID, audio=message.audio.file_id, caption=message.caption)
     except Exception as e: logger.error(f"Failed to re-upload message to log channel: {e}")
-    file_caption = message.caption or ""; file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
+    
+    file_caption = message.caption or ""
+    file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
     if not file_obj: return
+    
     original_file_name = getattr(file_obj, 'file_name', 'Photo')
+    
+    # --- THE FIX FOR .mp4 REMOVAL ---
+    # Create a cleaned version of the filename for use in the caption
     cleaned_file_name = original_file_name
     if settings.get("link_remover_on"):
         cleaned_file_name = re.sub(r'https?://\S+|@\w+|\[.*?\]|\(.*?\)', '', cleaned_file_name)
         cleaned_file_name = re.sub(r'[_.-]{2,}', '_', cleaned_file_name).strip('_. -')
+
+    # Remove the file extension for the {file_title} placeholder
+    file_title, file_ext = os.path.splitext(cleaned_file_name)
+
     new_caption_template = settings.get("caption_text") or file_caption
+    
     new_caption = new_caption_template
     if new_caption:
         file_size_mb = f"{file_obj.file_size / (1024*1024):.2f} MB" if file_obj.file_size else "N/A"
-        safe_file_name = html.escape(str(cleaned_file_name))
+        safe_full_name = html.escape(str(cleaned_file_name))
+        safe_title = html.escape(file_title) # The name without extension
         safe_file_caption = html.escape(file_caption)
-        new_caption = new_caption.replace("{file_name}", safe_file_name).replace("{file_size}", file_size_mb).replace("{file_caption}", safe_file_caption)
+        
+        # Replace all placeholders
+        new_caption = new_caption.replace("{file_name}", safe_full_name)
+        new_caption = new_caption.replace("{file_title}", safe_title)
+        new_caption = new_caption.replace("{file_size}", file_size_mb)
+        new_caption = new_caption.replace("{file_caption}", safe_file_caption)
+    
     try:
-        if new_caption != (message.caption or ""): await context.bot.edit_message_caption(chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML')
+        if new_caption != (message.caption or ""): 
+            await context.bot.edit_message_caption(chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML')
     except Exception as e:
-        if not ('message is not modified' in str(e).lower()): logger.error(f"Failed to edit caption in {channel_id}: {e}")
+        if not ('message is not modified' in str(e).lower()): 
+            logger.error(f"Failed to edit caption in {channel_id}: {e}")
 
 async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.my_chat_member: return
