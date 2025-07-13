@@ -11,7 +11,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ChatMemberHandler,  # <-- 1. IMPORT THE CORRECT HANDLER
+    ChatMemberHandler,
     filters,
     ContextTypes,
     ConversationHandler,
@@ -64,7 +64,8 @@ def get_user_channels(user_id):
 
 # --- Command Handlers ---
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the /start command and also serves as a menu to return to."""
     user = update.effective_user
     bot_username = context.bot.username
     add_to_channel_url = f"https://t.me/{bot_username}?startchannel=true&admin=post_messages+edit_messages"
@@ -76,15 +77,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_photo(
-        photo="https://i.imgur.com/rS2aYyH.jpeg",
-        caption=f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot. I can automatically edit captions for files, videos, and photos you post in your channels.\n\n"
-                f"1. Add me to your channel as an admin.\n"
-                f"2. Use the <b>/settings</b> command to configure me.\n\n"
-                f"Enjoy hassle-free channel management!",
-        parse_mode='HTML',
-        reply_markup=reply_markup
+    caption = (
+        f"Hey {user.mention_html()}!\n\n"
+        "I am an Auto Caption Bot. I can automatically edit captions for files, videos, and photos you post in your channels.\n\n"
+        "1. Add me to your channel as an admin.\n"
+        f"2. Use the <b>/settings</b> command to configure me.\n\n"
+        "Enjoy hassle-free channel management!"
     )
+
+    # If this function was called from a button press, edit the message.
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            await update.callback_query.edit_message_caption(
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        except: # If it's a text message, edit the text
+            await update.callback_query.edit_message_text(
+                text=caption,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+    else: # If called from /start command, send a new message
+        await update.message.reply_photo(
+            photo="https://i.imgur.com/rS2aYyH.jpeg",
+            caption=caption,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    # If part of a conversation, end it.
+    return ConversationHandler.END
     
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
@@ -102,19 +126,29 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
+        await update.callback_query.answer()
         await update.callback_query.edit_message_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
     else:
         await update.message.reply_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
 
+# --- Conversation and Settings Logic ---
+
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
+    """Starts the settings conversation."""
+    user_id = update.effective_user.id
     
+    # Logic to handle both command and button
+    query = update.callback_query
+    if query:
+        await query.answer()
+        target_message = query.message
+    else:
+        target_message = update.message
+        
     user_channels = get_user_channels(user_id)
     
     if not user_channels:
-        await query.edit_message_text("I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again.")
+        await target_message.reply_text("I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again.")
         return ConversationHandler.END
 
     keyboard = []
@@ -127,7 +161,12 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Choose a channel to manage its settings:", reply_markup=reply_markup)
+
+    if query:
+        await query.edit_message_text("Choose a channel to manage its settings:", reply_markup=reply_markup)
+    else:
+        await target_message.reply_text("Choose a channel to manage its settings:", reply_markup=reply_markup)
+
     return SELECTING_CHANNEL
 
 async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -147,7 +186,7 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton(f"📝 Caption: {caption_status}", callback_data="set_caption")],
         [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
         [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_channels")],
+        [InlineKeyboardButton("⬅️ Back to Channels", callback_data="settings_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(f"Managing settings for: <b>{chat.title}</b>", reply_markup=reply_markup, parse_mode='HTML')
@@ -158,7 +197,7 @@ async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     help_text = "Send me the new caption text. Use these placeholders:\n`{file_name}`\n`{file_size}`\n`{file_caption}`"
-    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="back_to_manage")]]
+    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data=f"channel_{context.user_data['current_channel_id']}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
@@ -175,7 +214,13 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
     
     await update.message.reply_text("✅ Caption updated successfully!")
-    await back_to_manage(update, context)
+    
+    # Create a fake query to go back to the menu
+    class DummyQuery:
+        def __init__(self, data): self.data = data
+        async def answer(self): pass
+        
+    await select_channel(Update(update.update_id, callback_query=DummyQuery(data=f"channel_{channel_id}")), context)
     return MANAGE_CHANNEL
 
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -200,7 +245,7 @@ async def remove_channel_confirm(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     keyboard = [
         [InlineKeyboardButton("Yes, Remove it", callback_data="confirm_delete")],
-        [InlineKeyboardButton("No, Go Back", callback_data="back_to_manage")]
+        [InlineKeyboardButton("No, Go Back", callback_data=f"channel_{context.user_data['current_channel_id']}")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("Are you sure?", reply_markup=reply_markup)
@@ -216,25 +261,13 @@ async def perform_remove_channel(update: Update, context: ContextTypes.DEFAULT_T
     await query.edit_message_text("Channel removed successfully.")
     return ConversationHandler.END
 
-async def back_to_manage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    class DummyQuery:
-        def __init__(self, data, from_user): self.data = data; self.from_user = from_user
-        async def answer(self): pass
-
-    user = update.effective_user
-    channel_id = context.user_data['current_channel_id']
-    dummy_query = DummyQuery(f"channel_{channel_id}", user)
-    
-    if update.callback_query: await update.callback_query.message.delete()
-
-    await select_channel(dummy_query, context)
-    return MANAGE_CHANNEL
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Operation canceled.")
     return ConversationHandler.END
+
+# --- Core Logic ---
 
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
@@ -283,9 +316,6 @@ async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Failed to edit caption in {channel_id}: {e}")
 
 async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # This function is now called by ChatMemberHandler. The update object is a ChatMemberUpdated object.
-    # The logic remains correct as it was already designed to use update.my_chat_member
-    
     if not update.my_chat_member: return
 
     new_member = update.my_chat_member.new_chat_member
@@ -307,35 +337,50 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 def main() -> None:
+    """Start the bot."""
     application = Application.builder().token(BOT_TOKEN).build()
     
     settings_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(settings_start, pattern='^settings_menu$')],
+        entry_points=[
+            CommandHandler("settings", settings_start),
+            CallbackQueryHandler(settings_start, pattern='^settings_menu$')
+        ],
         states={
             SELECTING_CHANNEL: [CallbackQueryHandler(select_channel, pattern='^channel_')],
             MANAGE_CHANNEL: [
                 CallbackQueryHandler(set_caption_prompt, pattern='^set_caption$'),
                 CallbackQueryHandler(toggle_link_remover, pattern='^toggle_link_remover$'),
                 CallbackQueryHandler(remove_channel_confirm, pattern='^remove_channel$'),
-                CallbackQueryHandler(settings_start, pattern='^back_to_channels$'),
+                # Back button now re-triggers the settings_start function
+                CallbackQueryHandler(settings_start, pattern='^settings_menu$'),
             ],
-            SETTING_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_caption), CallbackQueryHandler(back_to_manage, pattern='^back_to_manage$')],
-            CONFIRM_REMOVE: [CallbackQueryHandler(perform_remove_channel, pattern='^confirm_delete$'), CallbackQueryHandler(back_to_manage, pattern='^back_to_manage$')],
+            SETTING_CAPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_caption),
+                # Back button now goes directly to the select_channel function
+                CallbackQueryHandler(select_channel, pattern=r'^channel_')
+                ],
+            CONFIRM_REMOVE: [
+                CallbackQueryHandler(perform_remove_channel, pattern='^confirm_delete$'),
+                CallbackQueryHandler(select_channel, pattern=r'^channel_')
+                ],
         },
-        fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel, pattern='^cancel$')],
-        per_user=True, per_chat=True
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CallbackQueryHandler(cancel, pattern='^cancel$')
+        ],
+        # To avoid the PTBUserWarning from the logs
+        per_message=False,
     )
     
+    # --- Register all handlers ---
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("settings", start))
+    application.add_handler(settings_conv_handler)
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
     application.add_handler(CallbackQueryHandler(start, pattern='^start_menu$'))
-    application.add_handler(settings_conv_handler)
     
     file_filter = (filters.PHOTO | filters.Document.ALL | filters.VIDEO | filters.AUDIO) & filters.ChatType.CHANNEL
     application.add_handler(MessageHandler(file_filter, auto_caption_handler))
     
-    # <-- 2. REPLACE THE OLD HANDLER WITH THE NEW ONE
     application.add_handler(ChatMemberHandler(handle_new_admin, ChatMemberHandler.MY_CHAT_MEMBER))
 
     application.run_polling()
