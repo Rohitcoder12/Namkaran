@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version with All Fixes)
+# main.py (Final Definitive Version with ALL Fixes)
 import logging
 import os
 import re
@@ -138,7 +138,6 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     settings = get_channel_settings(channel_id) or {}; link_remover_status = "ON ✔️" if settings.get('link_remover_on') else "OFF ❌"
     keyboard = [[InlineKeyboardButton("📝 Set Caption 📝", callback_data="manage_caption")], [InlineKeyboardButton("🚫 Set Words Remover 🚫", callback_data="placeholder")], [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")], [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")], [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    # Store the message ID so we can edit it later
     context.user_data['last_menu_id'] = query.message.message_id
     await edit_or_send_message(query.message, f"Managing settings for: <b>{(await context.bot.get_chat(channel_id)).title}</b>", reply_markup)
     return MANAGE_CHANNEL
@@ -170,25 +169,13 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     channel_id = context.user_data['current_channel_id']; new_caption_text = update.message.text
     channels_collection.update_one({"_id": channel_id}, {"$set": {"caption_text": new_caption_text}}, upsert=True)
     await update.message.delete()
-    # Find the menu message to edit
-    menu_message = None
-    if context.user_data.get('last_menu_id'):
-        try:
-            # We can't directly use a message object from another update, so we create a dummy one.
-            menu_message = await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=context.user_data.get('last_menu_id'),
-                text="Updating..."
-            )
-        except Exception as e:
-            logger.error(f"Could not find menu message to edit back: {e}")
-    
-    if menu_message:
-        class DummyQuery:
-            def __init__(self, message): self.message = message
-            async def answer(self): pass
-        await manage_caption_menu(Update(update.update_id, callback_query=DummyQuery(message=menu_message)), context)
-    return MANAGE_CAPTION
+    try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data['last_menu_id'])
+    except: pass # Failsafe
+    await update.message.reply_text("✅ Caption updated successfully! Main menu will reappear shortly.")
+    await asyncio.sleep(2)
+    # Go back to the main settings menu
+    await settings_start(update, context)
+    return SELECTING_CHANNEL
 
 async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer("Caption deleted!")
@@ -196,16 +183,20 @@ async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await manage_caption_menu(update, context)
     return MANAGE_CAPTION
 
-# --- THE PERMANENT FIX ---
+# --- THE PERMANENT FIX IS HERE ---
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    # The channel ID is safely stored in the user_data context
-    channel_id = context.user_data['current_channel_id']
-    
+    # This is the correct way: get the channel_id from the context
+    channel_id = context.user_data.get('current_channel_id')
+
+    if not channel_id:
+        await query.message.reply_text("Error: Could not find channel context. Please go back and select a channel again.")
+        return MANAGE_CHANNEL
+
     current_state = (get_channel_settings(channel_id) or {}).get('link_remover_on', False)
     channels_collection.update_one({"_id": channel_id}, {"$set": {"link_remover_on": not current_state}}, upsert=True)
     
-    # We rebuild the menu by calling select_channel again, which is the correct way
+    # We rebuild the menu by calling select_channel again
     await select_channel(update, context)
     return MANAGE_CHANNEL
 
@@ -227,7 +218,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await edit_or_send_message(update.callback_query.message, "Operation canceled.", None)
     return ConversationHandler.END
 
-# ... (Core Logic and Handle New Admin functions remain unchanged) ...
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
     message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
