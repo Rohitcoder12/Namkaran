@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version)
+# main.py (Final Definitive Version with SyntaxError Fix)
 import logging
 import os
 import re
@@ -148,17 +148,17 @@ async def manage_caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 # --- THE FIX IS HERE ---
 async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    # Using html.escape() inside <code> tags to display HTML code literally.
+    # Corrected the f-string to avoid SyntaxError
     font_help_text = (
         '🔰 <b>About Caption Font</b> 🔰\n\n'
         'You can use HTML tags to format your caption text.\n\n'
-        f'➤ <b>Bold Text</b>\n<code>{html.escape("<b>{file_name}</b>")}</code>\n\n'
-        f'➤ <i>Italic Text</i>\n<code>{html.escape("<i>{file_name}</i>")}</code>\n\n'
-        f'➤ <u>Underline Text</u>\n<code>{html.escape("<u>{file_name}</u>")}</code>\n\n'
-        f'➤ <s>Strike Text</s>\n<code>{html.escape("<s>{file_name}</s>")}</code>\n\n'
-        f'➤ Spoiler Text\n<code>{html.escape("<tg-spoiler>{file_name}</tg-spoiler>")}</code>\n\n'
-        f'➤ <code>Mono Text</code>\n<code>{html.escape("<code>{file_name}</code>")}</code>\n\n'
-        f'➤ Hyperlink Text\n<code>{html.escape("<a href=\"https://t.me/RexonBlack\">{file_name}</a>")}</code>'
+        '➤ <b>Bold Text</b>\n<pre><b>{file_name}</b></pre>\n\n'
+        '➤ <i>Italic Text</i>\n<pre><i>{file_name}</i></pre>\n\n'
+        '➤ <u>Underline Text</u>\n<pre><u>{file_name}</u></pre>\n\n'
+        '➤ <s>Strike Text</s>\n<pre><s>{file_name}</s></pre>\n\n'
+        '➤ Spoiler Text\n<pre><tg-spoiler>{file_name}</tg-spoiler></pre>\n\n'
+        '➤ <code>Mono Text</code>\n<pre><code>{file_name}</code></pre>\n\n'
+        '➤ Hyperlink Text\n<pre><a href="https://t.me/RexonBlack">{file_name}</a></pre>'
     )
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, font_help_text, InlineKeyboardMarkup(keyboard))
@@ -184,7 +184,7 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer("Caption deleted!")
     channels_collection.update_one({"_id": context.user_data['current_channel_id']}, {"$unset": {"caption_text": ""}})
-    await manage_caption_menu(update, context)
+    await manage_caption_menu(update, context) # Refresh menu
     return MANAGE_CAPTION
 
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
