@@ -8,7 +8,7 @@ import traceback
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -40,8 +40,7 @@ SELECTING_CHANNEL, MANAGE_CHANNEL, SETTING_CAPTION, CONFIRM_REMOVE = range(4)
 
 # --- MongoDB Functions ---
 def get_db_collection():
-    if not MONGO_DB_NAME:
-        raise ValueError("MONGO_DB_NAME environment variable is not set.")
+    if not MONGO_DB_NAME: raise ValueError("MONGO_DB_NAME environment variable is not set.")
     try:
         client = MongoClient(MONGO_URI)
         db = client[MONGO_DB_NAME]
@@ -54,9 +53,7 @@ channels_collection = get_db_collection()
 channels_collection.create_index("admin_user_id")
 
 # --- Helper Functions ---
-def get_channel_settings(channel_id):
-    return channels_collection.find_one({"_id": channel_id})
-
+def get_channel_settings(channel_id): return channels_collection.find_one({"_id": channel_id})
 def get_user_channels(user_id):
     channels_cursor = channels_collection.find({"admin_user_id": user_id})
     return [c["_id"] for c in channels_cursor]
@@ -70,19 +67,14 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
     tb_string = "".join(tb_list)
     update_str = update.to_dict() if isinstance(update, Update) else str(update)
-    message = (
-        f"An exception was raised: {html.escape(str(context.error))}\n\n"
-        f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}</pre>\n\n"
-        f"<pre>{html.escape(tb_string)}</pre>"
-    )
+    message = f"An exception was raised: {html.escape(str(context.error))}\n\n<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}</pre>\n\n<pre>{html.escape(tb_string)}</pre>"
     if DEVELOPER_CHAT_ID:
         try: await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send error log to developer: {e}")
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    bot_username = context.bot.username
+    user = update.effective_user; bot_username = context.bot.username
     add_to_channel_url = f"https://t.me/{bot_username}?startchannel=true&admin=post_messages+edit_messages"
     keyboard = [[InlineKeyboardButton("➕ Add Me to Your Channel ➕", url=add_to_channel_url)], [InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu")], [InlineKeyboardButton("❓ Help", callback_data="help")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -91,33 +83,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.callback_query.answer()
         try: await update.callback_query.edit_message_caption(caption=caption, reply_markup=reply_markup, parse_mode='HTML')
         except BadRequest: await update.callback_query.edit_message_text(text=caption, reply_markup=reply_markup, parse_mode='HTML')
-    else:
-        await update.message.reply_photo(photo="https://i.imgur.com/rS2aYyH.jpeg", caption=caption, parse_mode='HTML', reply_markup=reply_markup)
+    else: await update.message.reply_photo(photo="https://i.imgur.com/rS2aYyH.jpeg", caption=caption, parse_mode='HTML', reply_markup=reply_markup)
     return ConversationHandler.END
-    
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders:\n   - <code>{file_name}</code>, <code>{file_size}</code>, <code>{file_caption}</code>\n\n4️⃣ <b>Link Remover:</b> Toggle on/off.\n\n5️⃣ <b>Log Channel:</b> Files are forwarded for your records."
+    help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders:\n   - <code>{file_name}</code>, <code>{file_size}</code>, <code>{file_caption}</code>\n\n4️⃣ <b>Link Remover:</b> Toggle on/off.\n\n5️⃣ <b>Log Channel:</b> Files are re-uploaded (not forwarded) for your records."
     keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="start_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
         await update.callback_query.answer()
-        # THE FIX: Try to edit caption first, if it fails (because it's a text message), edit text.
-        try:
-            await update.callback_query.edit_message_caption(caption=help_text, reply_markup=reply_markup, parse_mode='HTML')
-        except BadRequest:
-            await update.callback_query.edit_message_text(text=help_text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
-    else:
-        await update.message.reply_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
+        try: await update.callback_query.edit_message_caption(caption=help_text, reply_markup=reply_markup, parse_mode='HTML')
+        except BadRequest: await update.callback_query.edit_message_text(text=help_text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+    else: await update.message.reply_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
 
-# --- Conversation and Settings Logic ---
+# --- Settings & Conversation ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     query = update.callback_query
-    if query:
-        await query.answer()
-        message_to_edit = query.message
-    else:
-        message_to_edit = update.message
+    if query: await query.answer(); message_to_edit = query.message
+    else: message_to_edit = update.message
     user_channels = get_user_channels(user_id)
     if not user_channels:
         await message_to_edit.reply_text("I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again.")
@@ -131,15 +115,12 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = "Choose a channel to manage its settings:"
-    # THE FIX: Try to edit the message. If it fails (because it's a photo), delete and send a new one.
-    try:
-        await message_to_edit.edit_text(text, reply_markup=reply_markup)
+    try: await message_to_edit.edit_text(text, reply_markup=reply_markup)
     except BadRequest:
         await message_to_edit.delete()
         await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
     return SELECTING_CHANNEL
 
-# ... (The rest of the functions from `select_channel` to the end can remain the same as the last version) ...
 async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -155,8 +136,7 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return MANAGE_CHANNEL
 
 async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     help_text = "Send me the new caption text. Use these placeholders:\n`{file_name}`\n`{file_size}`\n`{file_caption}`"
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data=f"channel_{context.user_data['current_channel_id']}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -164,8 +144,7 @@ async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return SETTING_CAPTION
 
 async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    channel_id = context.user_data['current_channel_id']
-    new_caption_text = update.message.text
+    channel_id = context.user_data['current_channel_id']; new_caption_text = update.message.text
     channels_collection.update_one({"_id": channel_id}, {"$set": {"caption_text": new_caption_text}}, upsert=True)
     await update.message.reply_text("✅ Caption updated successfully!")
     class DummyQuery:
@@ -175,44 +154,51 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return MANAGE_CHANNEL
 
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    channel_id = context.user_data['current_channel_id']
-    current_setting = get_channel_settings(channel_id)
-    current_state = current_setting.get('link_remover_on', False) if current_setting else False
+    query = update.callback_query; await query.answer(); channel_id = context.user_data['current_channel_id']
+    current_setting = get_channel_settings(channel_id); current_state = current_setting.get('link_remover_on', False) if current_setting else False
     channels_collection.update_one({"_id": channel_id}, {"$set": {"link_remover_on": not current_state}}, upsert=True)
     await select_channel(update, context)
     return MANAGE_CHANNEL
 
 async def remove_channel_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     keyboard = [[InlineKeyboardButton("Yes, Remove it", callback_data="confirm_delete")], [InlineKeyboardButton("No, Go Back", callback_data=f"channel_{context.user_data['current_channel_id']}")] ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("Are you sure?", reply_markup=reply_markup)
     return CONFIRM_REMOVE
 
 async def perform_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    channel_id = context.user_data['current_channel_id']
+    query = update.callback_query; await query.answer(); channel_id = context.user_data['current_channel_id']
     channels_collection.delete_one({"_id": channel_id})
     await query.edit_message_text("Channel removed successfully.")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     await query.edit_message_text("Operation canceled.")
     return ConversationHandler.END
 
+# --- Core Logic ---
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
     message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
     settings = get_channel_settings(channel_id)
     if not settings: return
-    try: await context.bot.forward_message(chat_id=LOG_CHANNEL_ID, from_chat_id=channel_id, message_id=message_id)
-    except Exception as e: logger.error(f"Failed to forward message from {channel_id} to log channel: {e}")
+
+    # --- THE FIX: Download and re-upload instead of forwarding ---
+    try:
+        if message.document:
+            await context.bot.send_document(chat_id=LOG_CHANNEL_ID, document=message.document.file_id, caption=message.caption)
+        elif message.video:
+            await context.bot.send_video(chat_id=LOG_CHANNEL_ID, video=message.video.file_id, caption=message.caption)
+        elif message.photo:
+            await context.bot.send_photo(chat_id=LOG_CHANNEL_ID, photo=message.photo[-1].file_id, caption=message.caption)
+        elif message.audio:
+            await context.bot.send_audio(chat_id=LOG_CHANNEL_ID, audio=message.audio.file_id, caption=message.caption)
+        logger.info(f"Re-uploaded message {message_id} from {channel_id} to log channel {LOG_CHANNEL_ID}")
+    except Exception as e:
+        logger.error(f"Failed to re-upload message to log channel: {e}")
+
     file_caption = message.caption or ""
     file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
     if not file_obj: return
