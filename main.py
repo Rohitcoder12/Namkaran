@@ -72,29 +72,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         try: await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send error log to developer: {e}")
 
-# --- THE FIX IS HERE ---
+# --- Utility to handle message editing correctly ---
 async def edit_or_send_message(ctx, text, reply_markup):
-    """A robust helper to edit a message, regardless of whether it has a photo or not."""
     if isinstance(ctx, Update):
         message_obj = ctx.callback_query.message if ctx.callback_query else ctx.message
     else: message_obj = ctx
-    
-    try:
-        # First, try to edit it as a text-only message
-        await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
-    except BadRequest as e:
-        # If that fails because it's a photo, try editing the caption
-        if "There is no text in the message to edit" in str(e):
-            try:
-                # Corrected call: `disable_web_page_preview` is not a valid argument here
-                await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-            except Exception as e2:
-                logger.error(f"Failed to edit caption after failing to edit text: {e2}")
-                # Failsafe: send a new message
-                await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
-        else:
-            # Another error occurred, log it
-            logger.error(f"Failed to edit message text for a different reason: {e}")
+    try: await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+    except BadRequest:
+        try: await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+        except BadRequest: await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -105,7 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     caption = f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot. I can automatically edit captions for files, videos, and photos you post in your channels.\n\n1. Add me to your channel as an admin.\n2. Use the <b>/settings</b> command to configure me.\n\nEnjoy hassle-free channel management!"
     if update.callback_query:
         await update.callback_query.answer()
-        await edit_or_send_message(update.callback_query.message, caption, reply_markup)
+        await edit_or_send_message(update, caption, reply_markup)
     else: await update.message.reply_photo(photo="https://i.imgur.com/rS2aYyH.jpeg", caption=caption, parse_mode='HTML', reply_markup=reply_markup)
     return ConversationHandler.END
 
@@ -113,15 +99,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders...\n\n4️⃣ <b>Link Remover:</b> Toggle on/off.\n\n5️⃣ <b>Log Channel:</b> Files are re-uploaded for your records."
     keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="start_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.callback_query:
-        await update.callback_query.answer()
-        await edit_or_send_message(update.callback_query.message, help_text, reply_markup)
-    else: await update.message.reply_text(text=help_text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+    await edit_or_send_message(update, help_text, reply_markup)
 
-# --- (The rest of the code is the same as the last version and is correct) ---
 async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer("This feature is under development.", show_alert=True)
 
+# --- Conversation Logic ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -162,9 +145,21 @@ async def manage_caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     await edit_or_send_message(query.message, text, InlineKeyboardMarkup(keyboard))
     return MANAGE_CAPTION
 
+# --- THE FIX IS HERE ---
 async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    font_help_text = ('🔰 <b>About Caption Font</b> 🔰\n\n' 'You can use HTML tags to format your caption text.\n\n' '➤ <b>Bold Text</b>\n<pre><b>{file_name}</b></pre>\n\n' '➤ <i>Italic Text</i>\n<pre><i>{file_name}</i></pre>\n\n' '➤ <u>Underline Text</u>\n<pre><u>{file_name}</u></pre>\n\n' '➤ <s>Strike Text</s>\n<pre><s>{file_name}</s></pre>\n\n' '➤ Spoiler Text\n<pre><tg-spoiler>{file_name}</tg-spoiler></pre>\n\n' '➤ <code>Mono Text</code>\n<pre><code>{file_name}</code></pre>\n\n' '➤ Hyperlink Text\n<pre><a href="https://t.me/RexonBlack">{file_name}</a></pre>')
+    # Using html.escape() inside <code> tags to display HTML code literally.
+    font_help_text = (
+        '🔰 <b>About Caption Font</b> 🔰\n\n'
+        'You can use HTML tags to format your caption text.\n\n'
+        f'➤ <b>Bold Text</b>\n<code>{html.escape("<b>{file_name}</b>")}</code>\n\n'
+        f'➤ <i>Italic Text</i>\n<code>{html.escape("<i>{file_name}</i>")}</code>\n\n'
+        f'➤ <u>Underline Text</u>\n<code>{html.escape("<u>{file_name}</u>")}</code>\n\n'
+        f'➤ <s>Strike Text</s>\n<code>{html.escape("<s>{file_name}</s>")}</code>\n\n'
+        f'➤ Spoiler Text\n<code>{html.escape("<tg-spoiler>{file_name}</tg-spoiler>")}</code>\n\n'
+        f'➤ <code>Mono Text</code>\n<code>{html.escape("<code>{file_name}</code>")}</code>\n\n'
+        f'➤ Hyperlink Text\n<code>{html.escape("<a href=\"https://t.me/RexonBlack\">{file_name}</a>")}</code>'
+    )
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, font_help_text, InlineKeyboardMarkup(keyboard))
     return MANAGE_CAPTION
@@ -189,7 +184,7 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer("Caption deleted!")
     channels_collection.update_one({"_id": context.user_data['current_channel_id']}, {"$unset": {"caption_text": ""}})
-    await manage_caption_menu(update, context) # Refresh menu
+    await manage_caption_menu(update, context)
     return MANAGE_CAPTION
 
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
