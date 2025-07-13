@@ -1,3 +1,3 @@
 # requirements.txt
 python-telegram-bot
-pymongo[srv]
+pymongo
