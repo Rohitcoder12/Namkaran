@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from pymongo import MongoClient
+from pymongo.errors import ConfigurationError
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
@@ -22,27 +23,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- New Environment Variables ---
+# --- Environment Variables ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
-LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID")) # Must be an integer
+MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME") # <-- NEW VARIABLE
+LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID"))
 
 # Conversation states
 SELECTING_CHANNEL, MANAGE_CHANNEL, SETTING_CAPTION, CONFIRM_REMOVE = range(4)
 
-# --- MongoDB Functions ---
+# --- MongoDB Functions (UPDATED) ---
 
 def get_db_collection():
     """Establishes a connection to MongoDB and returns the channels collection."""
-    client = MongoClient(MONGO_URI)
-    db = client.get_database() # The DB name is part of the URI
-    return db.channels
+    if not MONGO_DB_NAME:
+        raise ValueError("MONGO_DB_NAME environment variable is not set.")
+    try:
+        client = MongoClient(MONGO_URI)
+        # Explicitly select the database using the new environment variable
+        db = client[MONGO_DB_NAME] # <-- THE FIX IS HERE
+        return db.channels
+    except ConfigurationError as e:
+        logger.error(f"MongoDB Configuration Error: {e}. Ensure your MONGO_URI is correct.")
+        raise
+    except Exception as e:
+        logger.error(f"Could not connect to MongoDB: {e}")
+        raise
 
 channels_collection = get_db_collection()
-# Create an index for faster lookups by admin_user_id
 channels_collection.create_index("admin_user_id")
 
-# --- Helper Functions (Now using MongoDB) ---
+# --- Helper Functions (No changes needed here) ---
 
 def get_channel_settings(channel_id):
     """Fetches settings for a specific channel from MongoDB."""
@@ -53,7 +64,8 @@ def get_user_channels(user_id):
     channels_cursor = channels_collection.find({"admin_user_id": user_id})
     return [c["_id"] for c in channels_cursor]
 
-# --- Command Handlers (Minor text updates) ---
+# --- THE REST OF THE CODE IS THE SAME, NO CHANGES BELOW THIS LINE ---
+# ... (all the other functions like start, help_command, auto_caption_handler, etc. remain unchanged) ...
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -97,8 +109,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         await update.message.reply_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
 
-# --- Settings & Conversation Logic (Updated to use MongoDB) ---
-
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -130,7 +140,7 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     channel_id = int(query.data.split('_')[1])
     context.user_data['current_channel_id'] = channel_id
     
-    settings = get_channel_settings(channel_id) or {} # Use empty dict if no settings found
+    settings = get_channel_settings(channel_id) or {}
     chat = await context.bot.get_chat(channel_id)
 
     caption_status = "Not Set" if not settings.get('caption_text') else "Set ✅"
@@ -145,6 +155,17 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(f"Managing settings for: <b>{chat.title}</b>", reply_markup=reply_markup, parse_mode='HTML')
     return MANAGE_CHANNEL
+
+async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    help_text = "Send me the new caption text. Use these placeholders:\n`{file_name}`\n`{file_size}`\n`{file_caption}`"
+    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="back_to_manage")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
+    return SETTING_CAPTION
 
 async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     channel_id = context.user_data['current_channel_id']
@@ -165,7 +186,6 @@ async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     channel_id = context.user_data['current_channel_id']
 
-    # Get current state or default to False
     current_setting = get_channel_settings(channel_id)
     current_state = current_setting.get('link_remover_on', False) if current_setting else False
 
@@ -178,118 +198,6 @@ async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE
     await select_channel(update, context)
     return MANAGE_CHANNEL
 
-async def perform_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    channel_id = context.user_data['current_channel_id']
-
-    channels_collection.delete_one({"_id": channel_id})
-    
-    await query.edit_message_text("Channel removed successfully.")
-    return ConversationHandler.END
-
-# --- Core Auto-Captioning & Forwarding Logic ---
-
-async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.channel_post:
-        return
-
-    message = update.channel_post
-    channel_id = message.chat.id
-    message_id = message.message_id
-    
-    settings = get_channel_settings(channel_id)
-    if not settings:
-        return # Channel is not managed by the bot
-
-    # --- NEW: Forward the message to the log channel ---
-    try:
-        await context.bot.forward_message(
-            chat_id=LOG_CHANNEL_ID,
-            from_chat_id=channel_id,
-            message_id=message_id
-        )
-        logger.info(f"Forwarded message {message_id} from {channel_id} to log channel {LOG_CHANNEL_ID}")
-    except Forbidden:
-        logger.error(f"Bot is not an admin in the log channel ({LOG_CHANNEL_ID}) or cannot send messages.")
-    except Exception as e:
-        logger.error(f"Failed to forward message from {channel_id} to log channel: {e}")
-
-    # --- Existing captioning logic ---
-    file_caption = message.caption or ""
-    
-    # Handle different file types including Photos
-    file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
-    if not file_obj:
-        return
-
-    # Photos don't have a file_name, so we handle that
-    file_name = getattr(file_obj, 'file_name', 'Photo') # Defaults to 'Photo' if no file_name attribute
-    file_size_bytes = file_obj.file_size
-    file_size_mb = f"{file_size_bytes / (1024*1024):.2f} MB" if file_size_bytes else "N/A"
-
-    new_caption = settings.get("caption_text") or file_caption
-    
-    if new_caption:
-        new_caption = new_caption.replace("{file_name}", str(file_name))
-        new_caption = new_caption.replace("{file_size}", file_size_mb)
-        new_caption = new_caption.replace("{file_caption}", file_caption)
-
-    if settings.get("link_remover_on"):
-        new_caption = re.sub(r'https?://\S+', '', new_caption).strip()
-
-    try:
-        if new_caption != file_caption:
-            await context.bot.edit_message_caption(
-                chat_id=channel_id,
-                message_id=message_id,
-                caption=new_caption,
-                parse_mode='HTML'
-            )
-            logger.info(f"Edited caption for message {message_id} in channel {channel_id}")
-    except Exception as e:
-        logger.error(f"Failed to edit caption in {channel_id}: {e}")
-
-async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles when the bot is made an admin in a new channel."""
-    if not update.my_chat_member:
-        return
-
-    new_member = update.my_chat_member.new_chat_member
-    if new_member.status == 'administrator':
-        user_id = update.my_chat_member.from_user.id
-        chat_id = update.my_chat_member.chat.id
-        
-        logger.info(f"Bot promoted to admin in {chat_id} by user {user_id}")
-        
-        # Add channel to DB, linking it to the user who added it
-        channels_collection.update_one(
-            {"_id": chat_id},
-            {"$set": {"admin_user_id": user_id}},
-            upsert=True
-        )
-
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!\n\n"
-                 f"You can now configure its settings using the /settings command." ,
-            parse_mode='HTML'
-        )
-
-# (The ConversationHandler and main function setup remain largely the same, but I'm including them
-# fully for completeness and updating the MessageHandler filter for photos.)
-
-async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    
-    help_text = "Send me the new caption text. Use these placeholders:\n`{file_name}`\n`{file_size}`\n`{file_caption}`"
-    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="back_to_manage")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(text=help_text, parse_mode='HTML', reply_markup=reply_markup, disable_web_page_preview=True)
-    return SETTING_CAPTION
-
 async def remove_channel_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -300,9 +208,18 @@ async def remove_channel_confirm(update: Update, context: ContextTypes.DEFAULT_T
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("Are you sure?", reply_markup=reply_markup)
     return CONFIRM_REMOVE
+
+async def perform_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    channel_id = context.user_data['current_channel_id']
+
+    channels_collection.delete_one({"_id": channel_id})
     
+    await query.edit_message_text("Channel removed successfully.")
+    return ConversationHandler.END
+
 async def back_to_manage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # A bit of a hack to recreate the menu without a query object
     class DummyQuery:
         def __init__(self, data, from_user): self.data = data; self.from_user = from_user
         async def answer(self): pass
@@ -321,6 +238,73 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     await query.edit_message_text("Operation canceled.")
     return ConversationHandler.END
+
+async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.channel_post: return
+
+    message = update.channel_post
+    channel_id = message.chat.id
+    message_id = message.message_id
+    
+    settings = get_channel_settings(channel_id)
+    if not settings: return
+
+    try:
+        await context.bot.forward_message(chat_id=LOG_CHANNEL_ID, from_chat_id=channel_id, message_id=message_id)
+        logger.info(f"Forwarded message {message_id} from {channel_id} to log channel {LOG_CHANNEL_ID}")
+    except Forbidden:
+        logger.error(f"Bot is not an admin in the log channel ({LOG_CHANNEL_ID}) or cannot send messages.")
+    except Exception as e:
+        logger.error(f"Failed to forward message from {channel_id} to log channel: {e}")
+
+    file_caption = message.caption or ""
+    
+    file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
+    if not file_obj: return
+
+    file_name = getattr(file_obj, 'file_name', 'Photo')
+    file_size_bytes = file_obj.file_size
+    file_size_mb = f"{file_size_bytes / (1024*1024):.2f} MB" if file_size_bytes else "N/A"
+
+    new_caption = settings.get("caption_text") or file_caption
+    
+    if new_caption:
+        new_caption = new_caption.replace("{file_name}", str(file_name))
+        new_caption = new_caption.replace("{file_size}", file_size_mb)
+        new_caption = new_caption.replace("{file_caption}", file_caption)
+
+    if settings.get("link_remover_on"):
+        new_caption = re.sub(r'https?://\S+', '', new_caption).strip()
+
+    try:
+        if new_caption != file_caption:
+            await context.bot.edit_message_caption(
+                chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML'
+            )
+            logger.info(f"Edited caption for message {message_id} in channel {channel_id}")
+    except Exception as e:
+        logger.error(f"Failed to edit caption in {channel_id}: {e}")
+
+async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.my_chat_member: return
+
+    new_member = update.my_chat_member.new_chat_member
+    if new_member.status == 'administrator':
+        user_id = update.my_chat_member.from_user.id
+        chat_id = update.my_chat_member.chat.id
+        
+        logger.info(f"Bot promoted to admin in {chat_id} by user {user_id}")
+        
+        channels_collection.update_one(
+            {"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True
+        )
+
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!\n\n"
+                 f"You can now configure its settings using the /settings command." ,
+            parse_mode='HTML'
+        )
 
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
@@ -348,7 +332,6 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(start, pattern='^start_menu$'))
     application.add_handler(settings_conv_handler)
     
-    # Updated filter to include photos
     file_filter = (filters.PHOTO | filters.Document.ALL | filters.VIDEO | filters.AUDIO) & filters.ChatType.CHANNEL
     application.add_handler(MessageHandler(file_filter, auto_caption_handler))
     
