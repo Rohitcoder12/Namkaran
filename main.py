@@ -185,16 +185,11 @@ async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     settings = get_channel_settings(channel_id)
     if not settings: return
 
-    # --- THE FIX: Download and re-upload instead of forwarding ---
     try:
-        if message.document:
-            await context.bot.send_document(chat_id=LOG_CHANNEL_ID, document=message.document.file_id, caption=message.caption)
-        elif message.video:
-            await context.bot.send_video(chat_id=LOG_CHANNEL_ID, video=message.video.file_id, caption=message.caption)
-        elif message.photo:
-            await context.bot.send_photo(chat_id=LOG_CHANNEL_ID, photo=message.photo[-1].file_id, caption=message.caption)
-        elif message.audio:
-            await context.bot.send_audio(chat_id=LOG_CHANNEL_ID, audio=message.audio.file_id, caption=message.caption)
+        if message.document: await context.bot.send_document(chat_id=LOG_CHANNEL_ID, document=message.document.file_id, caption=message.caption)
+        elif message.video: await context.bot.send_video(chat_id=LOG_CHANNEL_ID, video=message.video.file_id, caption=message.caption)
+        elif message.photo: await context.bot.send_photo(chat_id=LOG_CHANNEL_ID, photo=message.photo[-1].file_id, caption=message.caption)
+        elif message.audio: await context.bot.send_audio(chat_id=LOG_CHANNEL_ID, audio=message.audio.file_id, caption=message.caption)
         logger.info(f"Re-uploaded message {message_id} from {channel_id} to log channel {LOG_CHANNEL_ID}")
     except Exception as e:
         logger.error(f"Failed to re-upload message to log channel: {e}")
@@ -205,11 +200,24 @@ async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     file_name = getattr(file_obj, 'file_name', 'Photo')
     file_size_mb = f"{file_obj.file_size / (1024*1024):.2f} MB" if file_obj.file_size else "N/A"
     new_caption = settings.get("caption_text") or file_caption
-    if new_caption: new_caption = new_caption.replace("{file_name}", str(file_name)).replace("{file_size}", file_size_mb).replace("{file_caption}", file_caption)
-    if settings.get("link_remover_on"): new_caption = re.sub(r'https?://\S+', '', new_caption).strip()
+    
+    # Replace placeholders BEFORE removing links/tags
+    if new_caption:
+        new_caption = new_caption.replace("{file_name}", str(file_name))
+        new_caption = new_caption.replace("{file_size}", file_size_mb)
+        new_caption = new_caption.replace("{file_caption}", file_caption)
+
+    # Apply link/tag remover if enabled
+    if settings.get("link_remover_on"):
+        # THE FIX: This new regex removes both URLs (http, https) and @username tags.
+        new_caption = re.sub(r'https?://\S+|@\w+', '', new_caption).strip()
+
     try:
-        if new_caption != file_caption: await context.bot.edit_message_caption(chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML')
-    except Exception as e: logger.error(f"Failed to edit caption in {channel_id}: {e}")
+        if new_caption != (message.caption or ""): # Compare with original caption to avoid unnecessary edits
+            await context.bot.edit_message_caption(chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML')
+    except Exception as e: 
+        if not ('message is not modified' in str(e).lower()):
+            logger.error(f"Failed to edit caption in {channel_id}: {e}")
 
 async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.my_chat_member: return
