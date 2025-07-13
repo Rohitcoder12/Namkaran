@@ -1,4 +1,4 @@
-# main.py (Final version with robust ConversationHandler logic)
+# main.py (Final version with missing placeholder function added)
 import logging
 import os
 import re
@@ -80,8 +80,10 @@ async def edit_or_send_message(ctx, text, reply_markup):
     try:
         await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
     except BadRequest: # If original was a photo
-        await message_obj.delete()
-        await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+        try:
+            await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        except BadRequest: # Failsafe if message was deleted or something else
+            await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -92,8 +94,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     caption = f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot. I can automatically edit captions for files, videos, and photos you post in your channels.\n\n1. Add me to your channel as an admin.\n2. Use the <b>/settings</b> command to configure me.\n\nEnjoy hassle-free channel management!"
     if update.callback_query:
         await update.callback_query.answer()
-        try: await update.callback_query.edit_message_caption(caption=caption, reply_markup=reply_markup, parse_mode='HTML')
-        except BadRequest: await update.callback_query.edit_message_text(text=caption, reply_markup=reply_markup, parse_mode='HTML')
+        await edit_or_send_message(update, caption, reply_markup)
     else: await update.message.reply_photo(photo="https://i.imgur.com/rS2aYyH.jpeg", caption=caption, parse_mode='HTML', reply_markup=reply_markup)
     return ConversationHandler.END
 
@@ -104,7 +105,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     reply_markup = InlineKeyboardMarkup(keyboard)
     await edit_or_send_message(update, help_text, reply_markup)
 
-# --- THE FIX: Refactored Conversation Logic ---
+# --- THE FIX: ADDING THE MISSING FUNCTION ---
+async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A placeholder for features that are not yet implemented."""
+    query = update.callback_query
+    await query.answer("This feature is under development.", show_alert=True)
+# ----------------------------------------------
+
+# --- Refactored Conversation Logic ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -124,7 +132,7 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     keyboard = [
         [InlineKeyboardButton("📝 Set Caption 📝", callback_data="manage_caption")],
         [InlineKeyboardButton("🚫 Set Words Remover 🚫", callback_data="placeholder")],
-        [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
+        [InlineKeyboardButton("✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
         [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")],
         [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]
     ]
@@ -159,7 +167,7 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     channel_id = context.user_data['current_channel_id']; new_caption_text = update.message.text
     channels_collection.update_one({"_id": channel_id}, {"$set": {"caption_text": new_caption_text}}, upsert=True)
     await update.message.reply_text("✅ Caption updated successfully!")
-    class DummyQuery: # Create a fake query to go back to the menu
+    class DummyQuery:
         def __init__(self, message): self.message = message
         async def answer(self): pass
     await manage_caption_menu(Update(update.update_id, callback_query=DummyQuery(message=update.message)), context)
@@ -196,7 +204,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await edit_or_send_message(query.message, "Operation canceled.", None)
     return ConversationHandler.END
 
-# ... (Core Logic and Handle New Admin functions remain unchanged) ...
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
     message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
@@ -229,7 +236,6 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!\n\nYou can now configure its settings using the /settings command." , parse_mode='HTML')
 
-# --- Main Application Setup ---
 def main() -> None:
     keep_alive()
     application = Application.builder().token(BOT_TOKEN).build()
