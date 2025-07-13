@@ -1,4 +1,4 @@
-# main.py (Final version with corrected edit_or_send_message function)
+# main.py (Final Polished Version with Corrected Help Text)
 import logging
 import os
 import re
@@ -72,20 +72,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         try: await context.bot.send_message(chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send error log to developer: {e}")
 
-# --- THE FIX IS HERE ---
+# --- Utility to handle message editing correctly ---
 async def edit_or_send_message(ctx, text, reply_markup):
     if isinstance(ctx, Update):
         message_obj = ctx.callback_query.message if ctx.callback_query else ctx.message
     else: message_obj = ctx
     try: await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
     except BadRequest:
-        try:
-            # We remove the invalid keyword argument from this call
-            await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-        except BadRequest:
-            await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+        try: await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
+        except BadRequest: await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
-# ... (The rest of the code is unchanged) ...
+# --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user; bot_username = context.bot.username
     add_to_channel_url = f"https://t.me/{bot_username}?startchannel=true&admin=post_messages+edit_messages"
@@ -107,6 +104,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer("This feature is under development.", show_alert=True)
 
+# --- Conversation Logic ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -147,9 +145,21 @@ async def manage_caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     await edit_or_send_message(query.message, text, InlineKeyboardMarkup(keyboard))
     return MANAGE_CAPTION
 
+# --- THE FIX IS HERE ---
 async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    font_help_text = ('🔰 <b>About Caption Font</b> 🔰\n\n' 'You can use HTML tags to format your caption text.\n\n' '➤ <b>Bold Text</b>\n  <code><b>{file_name}</b></code>\n\n' '➤ <i>Italic Text</i>\n  <code><i>{file_name}</i></code>\n\n' '➤ <u>Underline Text</u>\n  <code><u>{file_name}</u></code>\n\n' '➤ <s>Strike Text</s>\n  <code><s>{file_name}</s></code>\n\n' '➤ Spoiler Text\n  <code><tg-spoiler>{file_name}</tg-spoiler></code>\n\n' '➤ <code>Mono Text</code>\n  <code><code>{file_name}</code></code>\n\n' '➤ Hyperlink Text\n  <code><a href="https://t.me/RexonBlack">{file_name}</a></code>')
+    # This string is now formatted correctly to display like the demo bot
+    font_help_text = (
+        '🔰 <b>About Caption Font</b> 🔰\n\n'
+        'You can use HTML tags to format your caption text.\n\n'
+        '➤ <b>Bold Text</b>\n  <code><b>{file_name}</b></code>\n\n'
+        '➤ <i>Italic Text</i>\n  <code><i>{file_name}</i></code>\n\n'
+        '➤ <u>Underline Text</u>\n  <code><u>{file_name}</u></code>\n\n'
+        '➤ <s>Strike Text</s>\n  <code><s>{file_name}</s></code>\n\n'
+        '➤ Spoiler Text\n  <code><tg-spoiler>{file_name}</tg-spoiler></code>\n\n'
+        '➤ <code>Mono Text</code>\n  <code><code>{file_name}</code></code>\n\n'
+        '➤ Hyperlink Text\n  <code><a href="https://t.me/RexonBlack">{file_name}</a></code>'
+    )
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, font_help_text, InlineKeyboardMarkup(keyboard))
     return MANAGE_CAPTION
