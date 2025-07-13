@@ -1,4 +1,4 @@
-# main.py (Final version with missing placeholder function added)
+# main.py (Final version with robust channel checking)
 import logging
 import os
 import re
@@ -79,10 +79,10 @@ async def edit_or_send_message(ctx, text, reply_markup):
     else: message_obj = ctx
     try:
         await message_obj.edit_text(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
-    except BadRequest: # If original was a photo
+    except BadRequest:
         try:
             await message_obj.edit_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-        except BadRequest: # Failsafe if message was deleted or something else
+        except BadRequest:
             await message_obj.chat.send_message(text, reply_markup=reply_markup, parse_mode='HTML', disable_web_page_preview=True)
 
 # --- Command Handlers ---
@@ -99,32 +99,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # This is a standalone handler, not part of the conversation
-    help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders:\n   - <code>{file_name}</code>, <code>{file_size}</code>, <code>{file_caption}</code>\n\n4️⃣ <b>Link Remover:</b> Toggle on/off.\n\n5️⃣ <b>Log Channel:</b> Files are re-uploaded for your records."
+    help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders...\n\n4️⃣ <b>Link Remover:</b> Toggle on/off.\n\n5️⃣ <b>Log Channel:</b> Files are re-uploaded for your records."
     keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="start_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await edit_or_send_message(update, help_text, reply_markup)
 
-# --- THE FIX: ADDING THE MISSING FUNCTION ---
 async def placeholder_feature(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """A placeholder for features that are not yet implemented."""
-    query = update.callback_query
-    await query.answer("This feature is under development.", show_alert=True)
-# ----------------------------------------------
+    query = update.callback_query; await query.answer("This feature is under development.", show_alert=True)
 
 # --- Refactored Conversation Logic ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
-    user_channels = get_user_channels(update.effective_user.id)
-    if not user_channels:
-        await update.effective_message.reply_text("I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again.")
+    
+    user_id = update.effective_user.id
+    user_channels_ids = get_user_channels(user_id)
+    
+    keyboard = []
+    # THE FIX: Loop through channels and check if the bot can access them.
+    for channel_id in user_channels_ids:
+        try:
+            # This is the line that was causing the error
+            chat = await context.bot.get_chat(channel_id)
+            keyboard.append([InlineKeyboardButton(f"{chat.title}", callback_data=f"channel_{channel_id}")])
+        except Forbidden:
+            # If bot is not in the channel, log it and remove from DB
+            logger.warning(f"Bot is not in channel {channel_id} anymore. Removing from DB.")
+            channels_collection.delete_one({"_id": channel_id, "admin_user_id": user_id})
+        except Exception as e:
+            logger.error(f"Could not get chat info for {channel_id}: {e}")
+
+    if not keyboard: # If after checking, there are no valid channels left
+        text = "I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again."
+        if query: await query.edit_message_text(text)
+        else: await update.message.reply_text(text)
         return ConversationHandler.END
-    keyboard = [[InlineKeyboardButton(f"{(await context.bot.get_chat(c)).title}", callback_data=f"channel_{c}")] for c in user_channels]
+
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     await edit_or_send_message(update, "Choose a channel to manage its settings:", InlineKeyboardMarkup(keyboard))
     return SELECTING_CHANNEL
 
+# ... (The rest of the code is unchanged) ...
 async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
     channel_id = int(query.data.split('_')[1]); context.user_data['current_channel_id'] = channel_id
@@ -132,7 +147,7 @@ async def select_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     keyboard = [
         [InlineKeyboardButton("📝 Set Caption 📝", callback_data="manage_caption")],
         [InlineKeyboardButton("🚫 Set Words Remover 🚫", callback_data="placeholder")],
-        [InlineKeyboardButton("✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
+        [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
         [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")],
         [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]
     ]
@@ -176,7 +191,7 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer("Caption deleted!")
     channels_collection.update_one({"_id": context.user_data['current_channel_id']}, {"$unset": {"caption_text": ""}})
-    await manage_caption_menu(update, context) # Refresh menu
+    await manage_caption_menu(update, context)
     return MANAGE_CAPTION
 
 async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
