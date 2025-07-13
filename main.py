@@ -11,6 +11,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ChatMemberHandler,  # <-- 1. IMPORT THE CORRECT HANDLER
     filters,
     ContextTypes,
     ConversationHandler,
@@ -26,13 +27,13 @@ logger = logging.getLogger(__name__)
 # --- Environment Variables ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 MONGO_URI = os.environ.get("MONGO_URI")
-MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME") # <-- NEW VARIABLE
+MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME")
 LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID"))
 
 # Conversation states
 SELECTING_CHANNEL, MANAGE_CHANNEL, SETTING_CAPTION, CONFIRM_REMOVE = range(4)
 
-# --- MongoDB Functions (UPDATED) ---
+# --- MongoDB Functions ---
 
 def get_db_collection():
     """Establishes a connection to MongoDB and returns the channels collection."""
@@ -40,8 +41,7 @@ def get_db_collection():
         raise ValueError("MONGO_DB_NAME environment variable is not set.")
     try:
         client = MongoClient(MONGO_URI)
-        # Explicitly select the database using the new environment variable
-        db = client[MONGO_DB_NAME] # <-- THE FIX IS HERE
+        db = client[MONGO_DB_NAME]
         return db.channels
     except ConfigurationError as e:
         logger.error(f"MongoDB Configuration Error: {e}. Ensure your MONGO_URI is correct.")
@@ -53,19 +53,16 @@ def get_db_collection():
 channels_collection = get_db_collection()
 channels_collection.create_index("admin_user_id")
 
-# --- Helper Functions (No changes needed here) ---
+# --- Helper Functions ---
 
 def get_channel_settings(channel_id):
-    """Fetches settings for a specific channel from MongoDB."""
     return channels_collection.find_one({"_id": channel_id})
 
 def get_user_channels(user_id):
-    """Fetches all channels managed by a specific user."""
     channels_cursor = channels_collection.find({"admin_user_id": user_id})
     return [c["_id"] for c in channels_cursor]
 
-# --- THE REST OF THE CODE IS THE SAME, NO CHANGES BELOW THIS LINE ---
-# ... (all the other functions like start, help_command, auto_caption_handler, etc. remain unchanged) ...
+# --- Command Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -286,6 +283,9 @@ async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Failed to edit caption in {channel_id}: {e}")
 
 async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # This function is now called by ChatMemberHandler. The update object is a ChatMemberUpdated object.
+    # The logic remains correct as it was already designed to use update.my_chat_member
+    
     if not update.my_chat_member: return
 
     new_member = update.my_chat_member.new_chat_member
@@ -335,7 +335,8 @@ def main() -> None:
     file_filter = (filters.PHOTO | filters.Document.ALL | filters.VIDEO | filters.AUDIO) & filters.ChatType.CHANNEL
     application.add_handler(MessageHandler(file_filter, auto_caption_handler))
     
-    application.add_handler(MessageHandler(filters.ChatMemberUpdated.MY_CHAT_MEMBER, handle_new_admin))
+    # <-- 2. REPLACE THE OLD HANDLER WITH THE NEW ONE
+    application.add_handler(ChatMemberHandler(handle_new_admin, ChatMemberHandler.MY_CHAT_MEMBER))
 
     application.run_polling()
 
