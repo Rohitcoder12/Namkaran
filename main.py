@@ -1,4 +1,4 @@
-# main.py (Final version with allow_reentry=True)
+# main.py (Final version with corrected Caption Font help text)
 import logging
 import os
 import re
@@ -121,8 +121,7 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e: logger.error(f"Could not get chat info for {channel_id}: {e}")
     if not keyboard:
         text = "I'm not an admin in any of your channels yet. Add me to a channel first, then try /settings again."
-        if query: await query.edit_message_text(text)
-        else: await update.message.reply_text(text)
+        await edit_or_send_message(update, text, None)
         return ConversationHandler.END
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     await edit_or_send_message(update, "Choose a channel to manage its settings:", InlineKeyboardMarkup(keyboard))
@@ -146,9 +145,21 @@ async def manage_caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     await edit_or_send_message(query.message, text, InlineKeyboardMarkup(keyboard))
     return MANAGE_CAPTION
 
+# --- THE FIX IS HERE ---
 async def caption_font_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
-    font_help_text = "🔰 <b>About Caption Font</b> 🔰\n\nUse HTML tags to format text.\n\n➤ <b>Bold</b>: <code><b>text</b></code>\n➤ <i>Italic</i>: <code><i>text</i></code>\n➤ <u>Underline</u>: <code><u>text</u></code>\n➤ <s>Strike</s>: <code><s>text</s></code>\n➤ <spoiler>Spoiler</spoiler>: <code><spoiler>text</spoiler></code>\n➤ <code>Mono</code>: <code><code>text</code></code>\n➤ Hyperlink: <code><a href=\"URL\">text</a></code>"
+    # We escape the example tags to prevent Telegram from trying to render them.
+    font_help_text = (
+        "🔰 <b>About Caption Font</b> 🔰\n\n"
+        "You can use HTML tags to format your caption text.\n\n"
+        "➤ <b>Bold Text</b>\n  <code><b>text</b></code>\n\n"
+        "➤ <i>Italic Text</i>\n  <code><i>text</i></code>\n\n"
+        "➤ <u>Underline Text</u>\n  <code><u>text</u></code>\n\n"
+        "➤ <s>Strike Text</s>\n  <code><s>text</s></code>\n\n"
+        "➤ Spoiler Text\n  <code><tg-spoiler>text</tg-spoiler></code>\n\n"
+        "➤ <code>Mono Text</code>\n  <code><code>text</code></code>\n\n"
+        "➤ Hyperlink Text\n  <code><a href=\"URL\">text</a></code>"
+    )
     keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="manage_caption")]]
     await edit_or_send_message(query.message, font_help_text, InlineKeyboardMarkup(keyboard))
     return MANAGE_CAPTION
@@ -243,31 +254,13 @@ def main() -> None:
         entry_points=[CommandHandler("settings", settings_start), CallbackQueryHandler(settings_start, pattern='^settings_menu$')],
         states={
             SELECTING_CHANNEL: [CallbackQueryHandler(select_channel, pattern='^channel_')],
-            MANAGE_CHANNEL: [
-                CallbackQueryHandler(manage_caption_menu, pattern='^manage_caption$'),
-                CallbackQueryHandler(toggle_link_remover, pattern='^toggle_link_remover$'),
-                CallbackQueryHandler(remove_channel_confirm, pattern='^remove_channel$'),
-                CallbackQueryHandler(placeholder_feature, pattern='^placeholder$'),
-            ],
-            MANAGE_CAPTION: [
-                CallbackQueryHandler(set_caption_prompt, pattern='^set_caption_prompt$'),
-                CallbackQueryHandler(delete_caption, pattern='^delete_caption$'),
-                CallbackQueryHandler(caption_font_help, pattern='^caption_font_help$'),
-                CallbackQueryHandler(select_channel, pattern=r'^channel_'),
-            ],
-            SETTING_CAPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, save_caption),
-                CallbackQueryHandler(manage_caption_menu, pattern='^manage_caption$')
-            ],
-            CONFIRM_REMOVE: [
-                CallbackQueryHandler(perform_remove_channel, pattern='^confirm_delete$'),
-                CallbackQueryHandler(select_channel, pattern=r'^channel_')
-            ],
+            MANAGE_CHANNEL: [CallbackQueryHandler(manage_caption_menu, pattern='^manage_caption$'), CallbackQueryHandler(toggle_link_remover, pattern='^toggle_link_remover$'), CallbackQueryHandler(remove_channel_confirm, pattern='^remove_channel$'), CallbackQueryHandler(placeholder_feature, pattern='^placeholder$')],
+            MANAGE_CAPTION: [CallbackQueryHandler(set_caption_prompt, pattern='^set_caption_prompt$'), CallbackQueryHandler(delete_caption, pattern='^delete_caption$'), CallbackQueryHandler(caption_font_help, pattern='^caption_font_help$'), CallbackQueryHandler(select_channel, pattern=r'^channel_')],
+            SETTING_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_caption), CallbackQueryHandler(manage_caption_menu, pattern='^manage_caption$')],
+            CONFIRM_REMOVE: [CallbackQueryHandler(perform_remove_channel, pattern='^confirm_delete$'), CallbackQueryHandler(select_channel, pattern=r'^channel_')],
         },
         fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel, pattern='^cancel$')],
-        per_message=False,
-        # THE FIX: This is the key to solving the unresponsive button issue.
-        allow_reentry=True
+        per_message=False, allow_reentry=True
     )
 
     application.add_handler(CommandHandler("start", start))
