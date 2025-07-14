@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version)
+# main.py (Final Definitive Version with All Fixes)
 import logging
 import os
 import re
@@ -184,9 +184,6 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     channel_id = context.user_data['current_channel_id']; new_caption_text = update.message.text
     channels_collection.update_one({"_id": channel_id}, {"$set": {"caption_text": new_caption_text}}, upsert=True)
     await update.message.delete()
-    msg = await update.effective_chat.send_message("✅ Caption updated successfully!")
-    await asyncio.sleep(2)
-    await msg.delete()
     await caption_menu(update, context)
     return CAPTION_MENU
 
@@ -235,6 +232,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_user.send_message("Operation canceled.")
     return ConversationHandler.END
 
+# ... (Auto Caption and Handle New Admin functions are unchanged and correct) ...
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
     message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
