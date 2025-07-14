@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version for Direct Execution)
+# main.py (Final Definitive Version with a Stable Image)
 import logging
 import os
 import re
@@ -32,11 +32,8 @@ app = Flask('')
 @app.route('/')
 def home():
     return "I'm alive!"
-
 def run_flask():
-  # Koyeb's default port is 8000
-  app.run(host='0.0.0.0', port=8000)
-
+  app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
 def keep_alive():
     t = Thread(target=run_flask)
     t.daemon = True
@@ -53,13 +50,8 @@ MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME")
 LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID"))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID")
 
-# --- Photo Links ---
-PHOTO_LINKS = [
-    "https://telegra.ph/file/a7e53093198114a383461.jpg", "https://telegra.ph/file/984b725c899c7595a1a14.jpg",
-    "https://telegra.ph/file/01a4f475143a7593c6803.jpg", "https://telegra.ph/file/d0701c3a647e704689e47.jpg",
-    "https://telegra.ph/file/d598379435b7e3f28d844.jpg", "https://telegra.ph/file/b083c7a76326c111c1d63.jpg",
-    "https://telegra.ph/file/153d837651c640702c2e9.jpg", "https://telegra.ph/file/49c79237c444057863583.jpg"
-]
+# --- THE FIX: Using a single, stable image URL ---
+STABLE_PHOTO_URL = "https://i.imgur.com/gQc6G5L.png"
 
 # --- Conversation states ---
 SELECT_CHANNEL, MAIN_MENU, CAPTION_MENU, WORDS_REMOVER_MENU, AWAITING_CAPTION, AWAITING_WORDS, CONFIRM_REMOVE = range(7)
@@ -93,26 +85,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [[InlineKeyboardButton("➕ Add Me to Your Channel ➕", url=add_to_channel_url)], [InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu")], [InlineKeyboardButton("❓ Help", callback_data="help")], [InlineKeyboardButton("💬 Any Query?", url="https://t.me/RexonBlack")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     caption = f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot..."
-    photo_url = random.choice(PHOTO_LINKS)
     
-    # Delete previous menus if they exist
-    if context.user_data.get('menu_message_id'):
-        try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('menu_message_id'))
-        except: pass
-            
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
-            context.user_data['main_menu_message_id'] = update.callback_query.message.message_id
+            await update.callback_query.message.edit_media(media=InputMediaPhoto(media=STABLE_PHOTO_URL, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
         except BadRequest: # Failsafe if media is the same
-            await update.callback_query.message.delete()
-            msg = await update.effective_chat.send_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
-            context.user_data['main_menu_message_id'] = msg.message_id
+            await update.callback_query.message.edit_caption(caption=caption, reply_markup=reply_markup, parse_mode='HTML')
     else: 
-        msg = await update.message.reply_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
-        context.user_data['main_menu_message_id'] = msg.message_id
-        
+        msg = await update.message.reply_photo(photo=STABLE_PHOTO_URL, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
+        context.user_data['start_message_id'] = msg.message_id
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -151,7 +133,6 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     msg = await update.effective_chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data['menu_message_id'] = msg.message_id
-    
     return SELECT_CHANNEL
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -294,7 +275,6 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
 
-# THE FIX IS HERE
 def main():
     """Sets up and runs the bot."""
     application = Application.builder().token(BOT_TOKEN).build()
