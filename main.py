@@ -93,8 +93,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if context.user_data.get('menu_message_id'):
             try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('menu_message_id'))
             except: pass
+        if context.user_data.get('start_message_id'):
+            try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('start_message_id'))
+            except: pass
         msg = await update.message.reply_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
-        context.user_data['main_menu_message_id'] = msg.message_id
+        context.user_data['start_message_id'] = msg.message_id
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -128,12 +131,12 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = "Choose a channel to manage its settings:"
     
     current_message = query.message if query else update.message
-    # Always send a new text message for the menu to avoid photo/text edit conflicts
     if query and current_message.photo: await current_message.delete()
     if not query: await update.message.delete()
 
     msg = await update.effective_chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data['menu_message_id'] = msg.message_id
+    
     return SELECT_CHANNEL
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -231,7 +234,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_user.send_message("Operation canceled.")
     return ConversationHandler.END
 
-# ... (Auto Caption and Handle New Admin functions are unchanged and correct) ...
 async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.channel_post: return
     message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
@@ -277,9 +279,9 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
 
-# --- THE FIX IS HERE ---
-async def run_bot_async():
-    """Sets up and runs the bot's polling loop."""
+
+async def main_async():
+    """Sets up and runs the bot."""
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
     
@@ -309,7 +311,7 @@ async def run_bot_async():
             CONFIRM_REMOVE: [CallbackQueryHandler(perform_remove_channel, pattern='^delete_channel$'), CallbackQueryHandler(main_menu, pattern='^main_menu_back$')],
         },
         fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel, pattern='^cancel$')],
-        per_message=False, allow_reentry=True,
+        per_message=False, allow_reentry=True
     )
 
     application.add_handler(CommandHandler("start", start))
@@ -324,10 +326,18 @@ async def run_bot_async():
     await application.initialize()
     await application.start()
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    
+    # This part is just for the web server and can run forever
+    # It won't be reached if run_polling blocks, hence the threading
+    while True:
+        await asyncio.sleep(3600) # Keep the async loop alive
+
 
 if __name__ == "__main__":
-    # Start the bot in a background thread so it doesn't block gunicorn
-    bot_thread = Thread(target=lambda: asyncio.run(run_bot_async()))
-    bot_thread.daemon = True
-    bot_thread.start()
-    # Gunicorn will run the 'app' object from this file.
+    # Start the Flask web server in a separate thread
+    web_thread = Thread(target=app.run, kwargs={'host':'0.0.0.0','port':8000})
+    web_thread.daemon = True
+    web_thread.start()
+    
+    # Start the bot's async loop
+    asyncio.run(main_async())
