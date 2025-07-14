@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version with NameError Fix)
+# main.py (Final Definitive Version with Correct Startup Logic)
 import logging
 import os
 import re
@@ -284,8 +284,12 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
 
 # --- THE FIX IS HERE ---
-async def run_bot():
-    """Sets up and runs the bot's polling loop."""
+def main():
+    """Starts the bot and the web server."""
+    # Start the web server to keep the bot alive
+    keep_alive()
+    
+    # Set up and run the bot
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
     
@@ -327,14 +331,7 @@ async def run_bot():
     application.add_handler(ChatMemberHandler(handle_new_admin, ChatMemberHandler.MY_CHAT_MEMBER))
     
     logger.info("Starting bot polling...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 if __name__ == "__main__":
-    # Start the web server to keep the bot alive
-    keep_alive()
-    
-    # Start the bot
-    # This is the main, blocking call.
-    asyncio.run(run_bot())
+    main()
