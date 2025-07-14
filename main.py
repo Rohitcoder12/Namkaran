@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version for Direct Execution)
+# main.py (Final Definitive Version with NameError Fix)
 import logging
 import os
 import re
@@ -32,11 +32,8 @@ app = Flask('')
 @app.route('/')
 def home():
     return "I'm alive!"
-
 def run_flask():
-  # Koyeb's default port is 8000
-  app.run(host='0.0.0.0', port=8000)
-
+  app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
 def keep_alive():
     t = Thread(target=run_flask)
     t.daemon = True
@@ -94,25 +91,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     reply_markup = InlineKeyboardMarkup(keyboard)
     caption = f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot..."
     photo_url = random.choice(PHOTO_LINKS)
-    
-    # Delete previous menus if they exist
-    if context.user_data.get('menu_message_id'):
-        try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('menu_message_id'))
-        except: pass
-            
     if update.callback_query:
         await update.callback_query.answer()
-        try:
-            await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
-            context.user_data['main_menu_message_id'] = update.callback_query.message.message_id
-        except BadRequest: # If editing media fails, send new photo
-            await update.callback_query.message.delete()
-            msg = await update.effective_chat.send_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
-            context.user_data['main_menu_message_id'] = msg.message_id
-    else: 
+        await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
+    else:
+        if context.user_data.get('menu_message_id'):
+            try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('menu_message_id'))
+            except: pass
+        if context.user_data.get('start_message_id'):
+            try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('start_message_id'))
+            except: pass
         msg = await update.message.reply_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
-        context.user_data['main_menu_message_id'] = msg.message_id
-        
+        context.user_data['start_message_id'] = msg.message_id
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -293,7 +283,8 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
 
-async def run_bot_async():
+# --- THE FIX IS HERE ---
+async def run_bot():
     """Sets up and runs the bot's polling loop."""
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
@@ -340,15 +331,10 @@ async def run_bot_async():
     await application.start()
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     
-    # Keep the main async loop alive after starting polling
-    while True:
-        await asyncio.sleep(3600) 
-
 if __name__ == "__main__":
-    # Start the Flask web server in a separate thread
-    web_thread = Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000))))
-    web_thread.daemon = True
-    web_thread.start()
+    # Start the web server to keep the bot alive
+    keep_alive()
     
-    # Start the bot's async loop in the main thread
-    asyncio.run(main_async())
+    # Start the bot
+    # This is the main, blocking call.
+    asyncio.run(run_bot())
