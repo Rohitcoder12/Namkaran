@@ -32,9 +32,11 @@ app = Flask('')
 @app.route('/')
 def home():
     return "I'm alive!"
+
 def run_flask():
-  # Gunicorn uses port 8000 by default, so we'll use that.
+  # Koyeb's default port is 8000
   app.run(host='0.0.0.0', port=8000)
+
 def keep_alive():
     t = Thread(target=run_flask)
     t.daemon = True
@@ -92,16 +94,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     reply_markup = InlineKeyboardMarkup(keyboard)
     caption = f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot..."
     photo_url = random.choice(PHOTO_LINKS)
+    
+    # Delete previous menus if they exist
+    if context.user_data.get('menu_message_id'):
+        try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('menu_message_id'))
+        except: pass
+            
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
+        try:
+            await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
+            context.user_data['main_menu_message_id'] = update.callback_query.message.message_id
+        except BadRequest: # If editing media fails, send new photo
+            await update.callback_query.message.delete()
+            msg = await update.effective_chat.send_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
+            context.user_data['main_menu_message_id'] = msg.message_id
     else: 
         msg = await update.message.reply_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
         context.user_data['main_menu_message_id'] = msg.message_id
+        
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = "<b>How to use me:</b>\n\n1️⃣ Add to Channel\n2️⃣ Configure via /settings\n3️⃣ Set Caption with placeholders\n4️⃣ Toggle Link Remover"
+    help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders...\n\n4️⃣ <b>Link Remover:</b> Toggle on/off."
     keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="start_menu")]]
     if update.callback_query:
         await update.callback_query.answer()
@@ -136,7 +151,6 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     msg = await update.effective_chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data['menu_message_id'] = msg.message_id
-    
     return SELECT_CHANNEL
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -279,8 +293,7 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
 
-
-def run_bot_polling():
+async def run_bot_async():
     """Sets up and runs the bot's polling loop."""
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
@@ -323,13 +336,19 @@ def run_bot_polling():
     application.add_handler(ChatMemberHandler(handle_new_admin, ChatMemberHandler.MY_CHAT_MEMBER))
     
     logger.info("Starting bot polling...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    
+    # Keep the main async loop alive after starting polling
+    while True:
+        await asyncio.sleep(3600) 
 
 if __name__ == "__main__":
-    # Start the bot in a background thread
-    bot_thread = Thread(target=run_bot_polling)
-    bot_thread.daemon = True
-    bot_thread.start()
-
-    # The Flask app runs in the main thread, which Gunicorn will manage.
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
+    # Start the Flask web server in a separate thread
+    web_thread = Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000))))
+    web_thread.daemon = True
+    web_thread.start()
+    
+    # Start the bot's async loop in the main thread
+    asyncio.run(main_async())
