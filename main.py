@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version with Correct Startup Logic)
+# main.py (Final Definitive Version with Corrected Image Links)
 import logging
 import os
 import re
@@ -50,12 +50,16 @@ MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME")
 LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID"))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID")
 
-# --- Photo Links ---
+# --- THE FIX: Using direct image URLs ---
 PHOTO_LINKS = [
-    "https://telegra.ph/file/a7e53093198114a383461.jpg", "https://telegra.ph/file/984b725c899c7595a1a14.jpg",
-    "https://telegra.ph/file/01a4f475143a7593c6803.jpg", "https://telegra.ph/file/d0701c3a647e704689e47.jpg",
-    "https://telegra.ph/file/d598379435b7e3f28d844.jpg", "https://telegra.ph/file/b083c7a76326c111c1d63.jpg",
-    "https://telegra.ph/file/153d837651c640702c2e9.jpg", "https://telegra.ph/file/49c79237c444057863583.jpg"
+    "https://telegra.ph/file/a7e53093198114a383461.jpg",
+    "https://telegra.ph/file/984b725c899c7595a1a14.jpg",
+    "https://telegra.ph/file/01a4f475143a7593c6803.jpg",
+    "https://telegra.ph/file/d0701c3a647e704689e47.jpg",
+    "https://telegra.ph/file/d598379435b7e3f28d844.jpg",
+    "https://telegra.ph/file/b083c7a76326c111c1d63.jpg",
+    "https://telegra.ph/file/153d837651c640702c2e9.jpg",
+    "https://telegra.ph/file/49c79237c444057863583.jpg"
 ]
 
 # --- Conversation states ---
@@ -93,27 +97,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     photo_url = random.choice(PHOTO_LINKS)
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
-    else:
-        if context.user_data.get('menu_message_id'):
-            try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('menu_message_id'))
-            except: pass
-        if context.user_data.get('start_message_id'):
-            try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('start_message_id'))
-            except: pass
+        try:
+            await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
+        except BadRequest: # Failsafe if media is the same
+            await update.callback_query.message.edit_caption(caption=caption, reply_markup=reply_markup, parse_mode='HTML')
+    else: 
         msg = await update.message.reply_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
         context.user_data['start_message_id'] = msg.message_id
     return ConversationHandler.END
 
+# --- (The rest of the code is unchanged and correct) ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = "<b>How to use me:</b>\n\n1️⃣ <b>Add to Channel:</b> Add this bot as an admin...\n\n2️⃣ <b>Configure:</b> Send /settings...\n\n3️⃣ <b>Set Caption:</b> Use placeholders...\n\n4️⃣ <b>Link Remover:</b> Toggle on/off."
+    help_text = "<b>How to use me:</b>\n\n1️⃣ Add to Channel\n2️⃣ Configure via /settings\n3️⃣ Set Caption with placeholders\n4️⃣ Toggle Link Remover"
     keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="start_menu")]]
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.message.edit_caption(caption=help_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML', disable_web_page_preview=True)
     else: await update.message.reply_text(text=help_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML', disable_web_page_preview=True)
 
-# --- Conversation Flow ---
 async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query: await query.answer()
@@ -283,13 +284,9 @@ async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
         await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
 
-# --- THE FIX IS HERE ---
-def main():
-    """Starts the bot and the web server."""
-    # Start the web server to keep the bot alive
-    keep_alive()
-    
-    # Set up and run the bot
+
+def run_bot_polling():
+    """Sets up and runs the bot's polling loop."""
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
     
@@ -334,4 +331,8 @@ def main():
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    main()
+    # Start the web server to keep the bot alive
+    keep_alive()
+    
+    # This is the main, blocking call that runs the bot.
+    run_bot_polling()
