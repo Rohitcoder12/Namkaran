@@ -130,27 +130,41 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     text = "Choose a channel to manage its settings:"
-    if query:
-        # We need to edit the original start menu photo
-        await query.message.edit_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard))
-    else: 
-        await update.message.delete()
-        if context.user_data.get('main_menu_message_id'):
-            try: await context.bot.delete_message(chat_id=user_id, message_id=context.user_data.pop('main_menu_message_id'))
-            except: pass
-        # Send a new message that is text-only for easier editing
-        msg = await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        context.user_data['main_menu_message_id'] = msg.message_id
+    
+    current_message = query.message if query else update.message
+    # Always send a new text message for the menu to avoid photo/text edit conflicts
+    if not query: await update.message.delete()
+    if query and query.message.photo: await query.message.delete()
+
+    msg = await update.effective_chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data['menu_message_id'] = msg.message_id
+    
     return SELECT_CHANNEL
 
+# THE FIX IS HERE: The missing main_menu function
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
+    
     if 'channel_' in query.data:
         context.user_data['current_channel_id'] = int(query.data.split('_')[1])
+    
     channel_id = context.user_data['current_channel_id']
-    settings = get_channel_settings(channel_id) or {}; link_remover_status = "ON ✔️" if settings.get('link_remover_on', False) else "OFF ❌"
-    keyboard = [[InlineKeyboardButton("📝 Set Caption", callback_data="caption_menu")], [InlineKeyboardButton("🚫 Set Words Remover", callback_data="words_remover_menu")], [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")], [InlineKeyboardButton("🗑️ Remove Channel", callback_data="confirm_remove")], [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]]
-    await query.message.edit_text(f"Managing settings for: <b>{(await context.bot.get_chat(channel_id)).title}</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    settings = get_channel_settings(channel_id) or {}
+    link_remover_status = "ON ✔️" if settings.get('link_remover_on', False) else "OFF ❌"
+    
+    keyboard = [
+        [InlineKeyboardButton("📝 Set Caption", callback_data="caption_menu")],
+        [InlineKeyboardButton("🚫 Set Words Remover", callback_data="words_remover_menu")],
+        [InlineKeyboardButton(f"✂️ Link Remover: {link_remover_status}", callback_data="toggle_link_remover")],
+        [InlineKeyboardButton("🗑️ Remove Channel", callback_data="confirm_remove")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="settings_menu")]
+    ]
+    
+    await query.message.edit_text(
+        f"Managing settings for: <b>{(await context.bot.get_chat(channel_id)).title}</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
+    )
     return MAIN_MENU
 
 async def caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -158,7 +172,7 @@ async def caption_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     settings = get_channel_settings(context.user_data['current_channel_id']) or {}
     caption_text = settings.get("caption_text", "Not Set")
     text = f"<b>Caption Settings</b>\n\nCurrent Caption:\n<pre>{html.escape(caption_text)}</pre>"
-    keyboard = [[InlineKeyboardButton("✏️ Set Caption", callback_data="set_caption_prompt")], [InlineKeyboardButton("🗑️ Del Caption", callback_data="delete_caption"), InlineKeyboardButton("✍️ Caption Font", callback_data="caption_font_help")], [InlineKeyboardButton("⬅️ Back", callback_data=f"main_menu_back")]]
+    keyboard = [[InlineKeyboardButton("✏️ Set Caption", callback_data="set_caption_prompt")], [InlineKeyboardButton("🗑️ Del Caption", callback_data="delete_caption"), InlineKeyboardButton("✍️ Caption Font", callback_data="caption_font_help")], [InlineKeyboardButton("⬅️ Back", callback_data="main_menu_back")]]
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML', disable_web_page_preview=True)
     return CAPTION_MENU
 
@@ -171,14 +185,6 @@ async def words_remover_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     return WORDS_REMOVER_MENU
 
-async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query; await query.answer()
-    channel_id = context.user_data.get('current_channel_id')
-    current_state = (get_channel_settings(channel_id) or {}).get('link_remover_on', False)
-    channels_collection.update_one({"_id": channel_id}, {"$set": {"link_remover_on": not current_state}}, upsert=True)
-    await main_menu(update, context)
-    return MAIN_MENU
-
 async def set_caption_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer()
     text = "Send me the new caption text..."
@@ -190,6 +196,12 @@ async def save_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     channel_id = context.user_data['current_channel_id']; new_caption_text = update.message.text
     channels_collection.update_one({"_id": channel_id}, {"$set": {"caption_text": new_caption_text}}, upsert=True)
     await update.message.delete()
+    await caption_menu(update, context)
+    return CAPTION_MENU
+
+async def delete_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query; await query.answer("Caption deleted!")
+    channels_collection.update_one({"_id": context.user_data['current_channel_id']}, {"$unset": {"caption_text": ""}})
     await caption_menu(update, context)
     return CAPTION_MENU
 
@@ -208,7 +220,84 @@ async def save_words_remover(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await words_remover_menu(update, context)
     return WORDS_REMOVER_MENU
 
-# ... (other handlers like delete_caption, delete_words_remover, confirm_remove, etc.) ...
+async def delete_words_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query; await query.answer("Blacklist cleared!")
+    channels_collection.update_one({"_id": context.user_data['current_channel_id']}, {"$unset": {"banned_words": ""}})
+    await words_remover_menu(update, context)
+    return WORDS_REMOVER_MENU
+    
+async def toggle_link_remover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query; await query.answer()
+    channel_id = context.user_data.get('current_channel_id')
+    current_state = (get_channel_settings(channel_id) or {}).get('link_remover_on', False)
+    channels_collection.update_one({"_id": channel_id}, {"$set": {"link_remover_on": not current_state}}, upsert=True)
+    await main_menu(update, context)
+    return MAIN_MENU
+
+async def confirm_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query; await query.answer()
+    keyboard = [[InlineKeyboardButton("Yes, Remove it", callback_data="delete_channel")], [InlineKeyboardButton("No, Go Back", callback_data="main_menu_back")]]
+    await query.message.edit_text("Are you sure?", reply_markup=InlineKeyboardMarkup(keyboard))
+    return CONFIRM_REMOVE
+
+async def perform_remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query; await query.answer()
+    channels_collection.delete_one({"_id": context.user_data['current_channel_id']})
+    await query.message.edit_text("Channel removed successfully.")
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.callback_query:
+        await update.callback_query.answer(); await update.callback_query.message.delete()
+    await update.effective_user.send_message("Operation canceled.")
+    return ConversationHandler.END
+
+# ... (Auto Caption and Handle New Admin functions are unchanged and correct) ...
+async def auto_caption_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.channel_post: return
+    message = update.channel_post; channel_id = message.chat.id; message_id = message.message_id
+    settings = get_channel_settings(channel_id)
+    if not settings: return
+    try:
+        if message.document: await context.bot.send_document(chat_id=LOG_CHANNEL_ID, document=message.document.file_id, caption=message.caption)
+        elif message.video: await context.bot.send_video(chat_id=LOG_CHANNEL_ID, video=message.video.file_id, caption=message.caption)
+        elif message.photo: await context.bot.send_photo(chat_id=LOG_CHANNEL_ID, photo=message.photo[-1].file_id, caption=message.caption)
+        elif message.audio: await context.bot.send_audio(chat_id=LOG_CHANNEL_ID, audio=message.audio.file_id, caption=message.caption)
+    except Exception as e: logger.error(f"Failed to re-upload message to log channel: {e}")
+    file_caption = message.caption or ""; file_obj = message.document or message.video or message.audio or (message.photo[-1] if message.photo else None)
+    if not file_obj: return
+    original_file_name = getattr(file_obj, 'file_name', 'Photo')
+    cleaned_file_name = original_file_name
+    if settings.get("link_remover_on"):
+        cleaned_file_name = re.sub(r'https?://\S+|@\w+|\[.*?\]|\(.*?\)', '', cleaned_file_name)
+        cleaned_file_name = re.sub(r'[_.-]{2,}', '_', cleaned_file_name).strip('_. -')
+    banned_words = settings.get("banned_words", [])
+    if banned_words:
+        pattern = r'\b(' + '|'.join(re.escape(word) for word in banned_words) + r')\b'
+        cleaned_file_name = re.sub(pattern, '', cleaned_file_name, flags=re.IGNORECASE).strip()
+        cleaned_file_name = re.sub(r'\s{2,}', ' ', cleaned_file_name).strip()
+        cleaned_file_name = re.sub(r'[_.-]{2,}', '_', cleaned_file_name).strip('_. -')
+    file_title, file_ext = os.path.splitext(cleaned_file_name)
+    new_caption_template = settings.get("caption_text") or ""
+    if new_caption_template:
+        file_size_mb = f"{file_obj.file_size / (1024*1024):.2f} MB" if file_obj.file_size else "N/A"
+        safe_full_name = html.escape(str(cleaned_file_name)); safe_title = html.escape(file_title); safe_file_caption = html.escape(file_caption)
+        new_caption = new_caption_template.replace("{file_name}", safe_full_name).replace("{file_title}", safe_title).replace("{file_size}", file_size_mb).replace("{file_caption}", safe_file_caption)
+    else: new_caption = cleaned_file_name
+    try:
+        if new_caption != (message.caption or ""): await context.bot.edit_message_caption(chat_id=channel_id, message_id=message_id, caption=new_caption, parse_mode='HTML')
+    except Exception as e:
+        if not ('message is not modified' in str(e).lower()): logger.error(f"Failed to edit caption in {channel_id}: {e}")
+
+async def handle_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.my_chat_member: return
+    new_member = update.my_chat_member.new_chat_member
+    if new_member.status == 'administrator':
+        user_id = update.my_chat_member.from_user.id; chat_id = update.my_chat_member.chat.id
+        logger.info(f"Bot promoted to admin in {chat_id} by user {user_id}")
+        channels_collection.update_one({"_id": chat_id}, {"$set": {"admin_user_id": user_id}}, upsert=True)
+        await context.bot.send_message(chat_id=user_id, text=f"✅ I've been successfully added as an admin to <b>{update.my_chat_member.chat.title}</b>!", parse_mode='HTML')
+
 
 def main() -> None:
     keep_alive()
