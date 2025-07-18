@@ -1,4 +1,4 @@
-# main.py (Final Definitive Version with a Stable Image)
+# main.py (Final Definitive Version)
 import logging
 import os
 import re
@@ -50,8 +50,8 @@ MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME")
 LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID"))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID")
 
-# --- THE FIX: Using a single, stable image URL ---
-STABLE_PHOTO_URL = "https://i.imgur.com/gQc6G5L.png"
+# --- Photo Links ---
+PHOTO_LINKS = ["https://i.imgur.com/gQc6G5L.png"]
 
 # --- Conversation states ---
 SELECT_CHANNEL, MAIN_MENU, CAPTION_MENU, WORDS_REMOVER_MENU, AWAITING_CAPTION, AWAITING_WORDS, CONFIRM_REMOVE = range(7)
@@ -85,16 +85,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [[InlineKeyboardButton("➕ Add Me to Your Channel ➕", url=add_to_channel_url)], [InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu")], [InlineKeyboardButton("❓ Help", callback_data="help")], [InlineKeyboardButton("💬 Any Query?", url="https://t.me/RexonBlack")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     caption = f"Hey {user.mention_html()}!\n\nI am an Auto Caption Bot..."
-    
+    photo_url = random.choice(PHOTO_LINKS)
     if update.callback_query:
         await update.callback_query.answer()
-        try:
-            await update.callback_query.message.edit_media(media=InputMediaPhoto(media=STABLE_PHOTO_URL, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
-        except BadRequest: # Failsafe if media is the same
-            await update.callback_query.message.edit_caption(caption=caption, reply_markup=reply_markup, parse_mode='HTML')
+        await update.callback_query.message.edit_media(media=InputMediaPhoto(media=photo_url, caption=caption, parse_mode='HTML'), reply_markup=reply_markup)
     else: 
-        msg = await update.message.reply_photo(photo=STABLE_PHOTO_URL, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
-        context.user_data['start_message_id'] = msg.message_id
+        await update.message.reply_photo(photo=photo_url, caption=caption, parse_mode='HTML', reply_markup=reply_markup)
     return ConversationHandler.END
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -126,13 +122,8 @@ async def settings_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     text = "Choose a channel to manage its settings:"
-    
-    current_message = query.message if query else update.message
-    if query and current_message.photo: await current_message.delete()
-    if not query: await update.message.delete()
-
-    msg = await update.effective_chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    context.user_data['menu_message_id'] = msg.message_id
+    if query and query.message.photo: await query.message.edit_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else: await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_CHANNEL
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
